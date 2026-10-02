@@ -249,6 +249,8 @@ BASH_MASS = 2.5         # the basher counts as this many karts while bashing (hi
 BASH_KNOCK = 150.0      # extra shove given to whoever gets bashed, px/s
 BASH_TIRE = 0.35        # the basher's tyre grip during the lunge, so it carries instead of twisting
 BASH_SPIN = 0.3         # scales the spin a bash adds (hit the rear quarter -> spin-out)
+HIT_FLASH = 0.3         # seconds a kart's sprite flashes red after being bashed or hitting a wall
+WALL_HIT_IMPULSE = 60.0 # min collision impulse with a fence to trigger the red flash
 MAX_SPIN = 9.0          # rad/s cap on how fast any kart can spin (~1.4 turns a second)
 STAGGER_TIME = 0.45     # seconds a bashed kart's tyres are loose
 STAGGER_GRIP = 0.5      # grip multiplier while staggered
@@ -887,6 +889,7 @@ class Car:
         self.bash_hits = set()      # who this bash has already hit (each victim once per bash)
         self.stagger = 0.0          # > 0 after being bashed: tyres are loose
         self.flash = 0.0            # white flash after a hit
+        self.hit_flash = 0.0        # > 0 -> sprite flashes red (got bashed / hit a wall)
         self.impact = 0.0           # hardest hit this frame (camera shake)
         self.last_hit_by = 0
         # getting unstuck
@@ -1025,6 +1028,7 @@ class Car:
         self.boost_time = max(0.0, self.boost_time - dt)
         self.stagger = max(0.0, self.stagger - dt)
         self.flash = max(0.0, self.flash - dt)
+        self.hit_flash = max(0.0, self.hit_flash - dt)
         self.grudge_time = max(0.0, self.grudge_time - dt)
         if self.grudge_time <= 0:
             self.grudge = 0
@@ -1224,6 +1228,7 @@ def _resolve_pair(a, b, nx, ny, depth, px, py, dx, dy):
             victim.omega += (rx * ky - ry * kx) / (CAR_INERTIA * victim.mass) * BASH_SPIN
             victim.stagger = STAGGER_TIME
             victim.flash = 0.25
+            victim.hit_flash = HIT_FLASH            # victim flashes red
             victim.last_hit_by = basher.uid
             victim.grudge, victim.grudge_time = basher.uid, 5.0
             victim.impact = max(victim.impact, BASH_KNOCK * 1.5)
@@ -1285,6 +1290,8 @@ def _resolve_static(car, nx, ny, depth, px, py):
     car.vy += iy / m
     car.omega += (px * iy - py * ix) / inertia
     car.impact = max(car.impact, j)
+    if j > WALL_HIT_IMPULSE:            # a real wall smack -> flash the sprite red
+        car.hit_flash = HIT_FLASH
     if j > 80:
         spawn_particles(car.x + px, car.y + py, min(int(j / 30), 8), 70, (90, 150, 80), 0.4)
 
@@ -1588,7 +1595,7 @@ def lap_of(car):
     return max(0, int(car.progress / ROAD_LEN))
 
 # ---- multiplayer car sync ----------------------------------------------------------
-_NET_SNAP = ("vx", "vy", "omega", "steer_angle", "flash", "bash_time",
+_NET_SNAP = ("vx", "vy", "omega", "steer_angle", "flash", "bash_time", "hit_flash",
              "boost_time", "hearts", "progress", "slip_f", "slip_r",
              "dead", "last_lap", "best_lap")
 
@@ -1696,8 +1703,15 @@ def draw_car(screen, car, cam):
                 for wl, ww in ((3.5, 2.0), (3.5, -2.0), (-3.5, -2.0), (-3.5, 2.0))])
 
     body = [pt(lx, ly) for lx, ly in KART_BODY]
-    lit = car.flash > 0 or car.bash_time > 0
-    base_col = (90, 90, 95) if car.dead else car.color      # eliminated karts go grey
+    lit = car.flash > 0 or car.bash_time > 0 or car.hit_flash > 0
+    if car.dead:
+        base_col = (90, 90, 95)                 # eliminated karts go grey
+    elif car.bash_time > 0:
+        base_col = (255, 255, 255)              # this kart is bashing -> white
+    elif car.hit_flash > 0:
+        base_col = (235, 45, 45)                # got bashed / hit a wall -> red
+    else:
+        base_col = car.color
     # sprite stacking: the same body slice drawn bottom-to-top, each a pixel higher and
     # a little brighter, so the kart reads as a solid block with height
     for k in range(STACK_LAYERS):

@@ -40,6 +40,8 @@ GAME_MODES = [("race", "Race"), ("trial", "Time Trial"), ("elim", "Elimination")
               ("battle", "Battle"), ("team", "Team Race")]
 ELIM_INTERVAL = 8.0     # seconds between eliminations in Elimination mode
 TEAM_COLORS = [(230, 70, 70), (70, 120, 235)]   # red / blue teams
+MENU_STATES = {"menu", "mode", "gamemode", "mp_menu", "host_setup", "join_entry",
+               "settings", "name_entry", "results", "lobby"}
 
 def load_profile():
     import json
@@ -201,8 +203,19 @@ def main():
     except (pygame.error, FileNotFoundError):
         menu_bg = None
 
+    _dim = pygame.Surface((sim.W, sim.H))
+    _dim.set_alpha(130)
+    _dim.fill((10, 18, 12))
+
     def draw_bg():
-        if menu_bg is not None:
+        # live gameplay behind the menus: a paused race if one exists, else the attract bots
+        if player is not None and cam is not None and cars:
+            sim.draw_world(screen, cam, cars)
+            screen.blit(_dim, (0, 0))
+        elif attract_cam is not None and attract_cars:
+            sim.draw_world(screen, attract_cam, attract_cars)
+            screen.blit(_dim, (0, 0))
+        elif menu_bg is not None:
             screen.blit(menu_bg, (0, 0))
         else:
             screen.fill((30, 60, 30))
@@ -285,6 +298,7 @@ def main():
     vol_track = pygame.Rect(sim.W / 2 + 10, 92, 150, 10)
 
     cars, player, cam = [], None, None
+    attract_cars, attract_cam = [], None    # live bots racing behind the menu
     final_order = []        # frozen leaderboard shown on the results screen
     last_mtime = os.path.getmtime(SIM_PATH)
     main_mtime = os.path.getmtime(MAIN_PATH)
@@ -322,6 +336,7 @@ def main():
         countdown, go_timer = 3.0, 0.0
         elim_timer, ghost_rec, last_ranks, trial_lap, popup = 0.0, [], {}, 0, None
         ghost_best, ghost_time = None, 0.0
+        attract_cars.clear()        # its map is gone; rebuild the backdrop when we return
         state = "playing"
 
     def reload_and_migrate():
@@ -332,6 +347,24 @@ def main():
             cars = [migrate_car(c) for c in cars]
             player = cars[slot]
             cam = migrate_cam(cam, player)
+
+    def setup_attract():
+        # a fresh bots-only race used as the live menu backdrop (no player)
+        nonlocal attract_cars, attract_cam
+        sim.new_map(random.randint(0, 1_000_000))
+        attract_cars = sim.spawn_grid(6)
+        for i, b in enumerate(attract_cars):
+            sim.make_bot(b, i, PLAYER_PALETTE[i % len(PLAYER_PALETTE)])
+        attract_cam = sim.Camera(attract_cars[0])
+
+    def step_attract(dt):
+        if not attract_cars:
+            setup_attract()
+        ctrls = [sim.bot_control(c, attract_cars, dt) for c in attract_cars]
+        sim.step(dt, attract_cars, ctrls)
+        # follow the leader so the backdrop always shows action
+        lead = max(attract_cars, key=lambda c: c.progress)
+        attract_cam.update(dt, lead)
 
     def my_flag():
         return sim.FLAG_CODES[flag_idx] if sim.FLAG_CODES else None
@@ -391,6 +424,7 @@ def main():
             netc.send({"t": "bots", "list": mp_bots})
         online, bcast_t, end_title = True, 0.0, "FINISH"
         countdown, go_timer = 3.0, 0.0
+        attract_cars.clear()
         state = "playing"
 
     def apply_finished(order):
@@ -447,6 +481,10 @@ def main():
         if sm != last_mtime and state != "playing":
             last_mtime = sm
             try_reload()
+
+        # advance the live menu backdrop (only when no race is in progress to resume)
+        if state in MENU_STATES and player is None:
+            step_attract(dt)
 
         # ---- drain anything the server sent since last frame ----------------------
         if netc is not None:
