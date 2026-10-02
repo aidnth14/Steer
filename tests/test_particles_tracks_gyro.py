@@ -79,6 +79,23 @@ class TestParticlesTracksGyro(unittest.TestCase):
         self.assertEqual(sim.MOBILE_TILT, 0.75)
         sim.MOBILE_TILT = None
 
+    def test_camera_centered_on_car(self):
+        car = sim.Car(400.0, 600.0, 30.0, (255, 0, 0))
+        cam = sim.Camera(car)
+        cam.shake = 0.0
+        cam.ox = cam.oy = 0.0
+        # Check through multiple motion steps
+        for speed in (0.0, 100.0, 300.0):
+            car.vx, car.vy = speed, speed * 0.5
+            car.x += car.vx * 0.016
+            car.y += car.vy * 0.016
+            cam.update(0.016, car)
+            cam.shake = 0.0
+            cam.ox = cam.oy = 0.0
+            sx, sy = cam.to_screen(car.x, car.y)
+            self.assertAlmostEqual(sx, sim.W / 2, delta=0.001)
+            self.assertAlmostEqual(sy, sim.H / 2, delta=0.001)
+
 
 if __name__ == "__main__":
     unittest.main()

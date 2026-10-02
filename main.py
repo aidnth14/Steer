@@ -616,7 +616,8 @@ def main():
             restart()
         if sm != last_mtime and state != "playing":
             last_mtime = sm
-            try_reload()
+            if try_reload() and state in MENU_STATES and player is None:
+                setup_attract()
 
         # advance the live menu backdrop (only when no race is in progress to resume)
         if state in MENU_STATES and player is None:

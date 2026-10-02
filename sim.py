@@ -600,6 +600,8 @@ def road_pose(s, lateral=0.0):
 def track_coords(x, y, hint=None):
     # (arc length, px right of the centre line, nearest road sample) for a world point
     n = len(ROAD)
+    if n == 0:
+        return 0.0, 0.0, 0
     best_i, best_d = 0, None
     rng = range(n) if hint is None else range(hint - AI_SEARCH, hint + AI_SEARCH + 1)
     for j in rng:
@@ -1288,7 +1290,7 @@ class Car:
                     dist_sq = dx * dx + dy * dy
                     # Normal frame motion (0.2px to 35px), ignore respawns / teleports
                     if 0.04 <= dist_sq < 1225.0:
-                        w = 4 if self.drift else 3
+                        w = 7 if self.drift else 6
                         self.trail.append([pwx, pwy, wx, wy, TRAIL_LIFE, w, off > 0.5])
                 self.last_wheel_pos[wname] = (wx, wy)
             else:
@@ -1721,10 +1723,10 @@ class Camera:
         self.ox = self.oy = 0.0
 
     def update(self, dt, car):
-        t_pos = min(CAM_POS_SMOOTH * dt, 1)
+        # The car is always at the exact centre of the camera
+        self.x = car.x
+        self.y = car.y
         t_rot = min(CAM_ROT_SMOOTH * dt, 1)
-        self.x = (self.x + wrap_delta(self.x, car.x) * t_pos) % WORLD
-        self.y = (self.y + wrap_delta(self.y, car.y) * t_pos) % WORLD
         # face partly where the kart is going rather than where it points, so a slide or a
         # spin-out doesn't whip the whole screen round
         target = car.angle
@@ -1910,7 +1912,7 @@ def draw_trails(screen, cars, cam):
             elif len(seg) == 3:
                 x0, y0, life = seg
                 x1, y1 = x0 + 1, y0 + 1
-                width, is_grass = 3, False
+                width, is_grass = 6, False
             else:
                 continue
 
@@ -1933,7 +1935,11 @@ def draw_trails(screen, cars, cam):
                     )
                 else:
                     col = base_col
-                pygame.draw.line(screen, col, (round(sx0), round(sy0)), (round(sx1), round(sy1)), width)
+                p0 = (round(sx0), round(sy0))
+                p1 = (round(sx1), round(sy1))
+                pygame.draw.line(screen, col, p0, p1, width)
+                if width >= 5:
+                    pygame.draw.circle(screen, col, p1, width // 2)
 
 def _get_particle_sprite(color, size, alpha_step):
     key = (color[0], color[1], color[2], size, alpha_step)
