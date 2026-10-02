@@ -8,6 +8,6 @@ services:
     name: steer-server
     runtime: python
     plan: free
-    buildCommand: pip install "websockets>=12"
+    buildCommand: pip install "websockets>=14"
     startCommand: python server.py
     healthCheckPath: /
