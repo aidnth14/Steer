@@ -751,42 +751,65 @@ def build_ground():
 
 
 # ---- minimap -----------------------------------------------------------------------
-MINIMAP = None          # scaled-down baked map, built once per track
-MINIMAP_MAX = 112       # longest side in px
+# Just the road layout (white strokes + ~22% black fill) and the kart markers -- no
+# grass/dirt texture. Prebaked once per track; markers drawn per frame.
+MINIMAP = None
+MINIMAP_MAX = 118       # longest side in px
 MM_SCALE = 1.0
-MM_ORIGIN = (0, 0)      # world coords of the minimap's (0, 0), same as GROUND_ORIGIN
+MM_MINX = MM_MINY = 0.0
+MM_PAD = 7
+MM_SIZE = (0, 0)
 
 def _build_minimap():
-    global MINIMAP, MM_SCALE, MM_ORIGIN
-    if GROUND_SURF is None:
+    global MINIMAP, MM_SCALE, MM_MINX, MM_MINY, MM_SIZE
+    if not ROAD:
         MINIMAP = None
         return
-    gw, gh = GROUND_SURF.get_size()
-    MM_SCALE = MINIMAP_MAX / max(gw, gh)
-    MINIMAP = pygame.transform.smoothscale(
-        GROUND_SURF, (max(1, round(gw * MM_SCALE)), max(1, round(gh * MM_SCALE))))
-    MM_ORIGIN = GROUND_ORIGIN
+    half = ROAD_WIDTH / 2
+    left, right = [], []
+    for (rx, ry), (tx, ty) in zip(ROAD, ROAD_T):
+        nx, ny = -ty, tx                 # road normal
+        left.append((rx + nx * half, ry + ny * half))
+        right.append((rx - nx * half, ry - ny * half))
+    xs = [p[0] for p in left + right]
+    ys = [p[1] for p in left + right]
+    MM_MINX, MM_MINY = min(xs), min(ys)
+    span = max(max(xs) - MM_MINX, max(ys) - MM_MINY)
+    MM_SCALE = (MINIMAP_MAX - 2 * MM_PAD) / span
+    sw = round((max(xs) - MM_MINX) * MM_SCALE) + 2 * MM_PAD
+    sh = round((max(ys) - MM_MINY) * MM_SCALE) + 2 * MM_PAD
+    MM_SIZE = (sw, sh)
+
+    def tp(p):
+        return (round((p[0] - MM_MINX) * MM_SCALE) + MM_PAD,
+                round((p[1] - MM_MINY) * MM_SCALE) + MM_PAD)
+
+    L, R = [tp(p) for p in left], [tp(p) for p in right]
+    surf = pygame.Surface((sw, sh), pygame.SRCALPHA)
+    pygame.draw.polygon(surf, (0, 0, 0, 55), L + R[::-1])   # ~22% black road fill
+    pygame.draw.lines(surf, (255, 255, 255, 255), True, L, 2)
+    pygame.draw.lines(surf, (255, 255, 255, 255), True, R, 2)
+    MINIMAP = surf
+
+def _mm_point(x, y):
+    return (round((x - MM_MINX) * MM_SCALE) + MM_PAD, round((y - MM_MINY) * MM_SCALE) + MM_PAD)
 
 def draw_minimap(screen, cars, player):
     if MINIMAP is None:
         return
-    mw, mh = MINIMAP.get_size()
-    px, py = W - mw - 10, H - mh - 10            # bottom-right corner
-    pygame.draw.rect(screen, (18, 24, 18), (px - 3, py - 3, mw + 6, mh + 6), border_radius=4)
+    mw, mh = MM_SIZE
+    px, py = W - mw - 12, H - mh - 12            # bottom-right corner
     screen.blit(MINIMAP, (px, py))
-    pygame.draw.rect(screen, (235, 235, 235), (px - 3, py - 3, mw + 6, mh + 6), 1, border_radius=4)
-    ox, oy = MM_ORIGIN
     for c in cars:
-        mx = px + (c.x - ox) * MM_SCALE
-        my = py + (c.y - oy) * MM_SCALE
-        if not (px <= mx <= px + mw and py <= my <= py + mh):
-            continue
+        mx, my = _mm_point(c.x, c.y)
+        mx = min(max(px + 2, mx + px), px + mw - 2)     # keep markers inside the minimap
+        my = min(max(py + 2, my + py), py + mh - 2)
         if c is player:
-            pygame.draw.circle(screen, (255, 255, 255), (int(mx), int(my)), 4)
-            pygame.draw.circle(screen, (20, 20, 20), (int(mx), int(my)), 4, 1)
+            pygame.draw.circle(screen, (255, 255, 255), (mx, my), 4)
+            pygame.draw.circle(screen, (20, 20, 20), (mx, my), 4, 1)
         elif not c.dead:
-            pygame.draw.circle(screen, c.color, (int(mx), int(my)), 3)
-            pygame.draw.circle(screen, (20, 20, 20), (int(mx), int(my)), 3, 1)
+            pygame.draw.circle(screen, c.color, (mx, my), 3)
+            pygame.draw.circle(screen, (20, 20, 20), (mx, my), 3, 1)
 
 
 def new_map(seed):
