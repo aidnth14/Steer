@@ -84,14 +84,37 @@ STEER_SERVER_URL=ws://localhost:8765 python main.py
 ```
 
 On **Render** (free): push this repo to GitHub → Render → **New → Blueprint** → pick the
-repo (`render.yaml` provisions a Web Service running `server.py`). Render gives you a URL
-like `https://steer-server.onrender.com`; players then launch with:
+repo (`render.yaml` provisions a Web Service running `server.py`, plus an optional Key
+Value/Redis instance). Render gives you a URL like `https://steer-server.onrender.com`;
+players then launch with:
 
 ```
 STEER_SERVER_URL=wss://steer-server.onrender.com python main.py
 ```
 
 (The client reads `STEER_SERVER_URL`; default is `ws://localhost:8765`.)
+
+### Scaling with Redis + Docker (optional)
+
+One server instance comfortably handles **7–10 lobbies** (~120 sockets) in memory — Redis is
+only needed to run **multiple** server replicas that share lobbies. Set `REDIS_URL` to turn
+it on; without it the server stays in-process (identical behaviour).
+
+With Redis, the instance a lobby is *created* on **owns** it (holds the room + all game
+logic). Other instances are thin edges that pipe their client's frames to the owner over a
+Redis **pub/sub bus** and deliver the owner's replies back; a Redis **registry**
+(`steer:owner:<code>`) lets any instance find a lobby's owner, and a small per-lobby summary
+is cached in Redis. So a player can join a lobby hosted on any replica.
+
+Run a local cluster with Docker:
+
+```
+docker compose up --build --scale server=3   # 3 server replicas + redis, shared lobbies
+# clients: STEER_SERVER_URL=ws://localhost:8765 python main.py
+```
+
+On Render, keep the Key Value service from `render.yaml` and set the web service's instance
+count > 1 to scale out.
 
 ### How the netcode works
 
@@ -118,7 +141,10 @@ Lobby, ready-up, kick, auto-start, and host migration are all handled server-sid
   sound, car state (de)serialization for multiplayer. Edit + save it and the running
   single-player game picks the change up live (state carries over).
 - `net.py` — client networking: a background WebSocket thread the game polls each frame.
-- `server.py` — the multiplayer relay/lobby server (deploy to Render; see Multiplayer).
+- `server.py` — the multiplayer lobby/relay server; optional Redis bus for multi-instance
+  scaling (deploy to Render; see Multiplayer).
+- `Dockerfile`, `docker-compose.yml` — container + a local multi-replica cluster behind Redis.
+- `tests/` — headless `unittest` suite (`python3 -m unittest discover tests`).
 - `assets/track_tiles/` — the dirt-on-grass road tiles (9-slice + 4 inner corners) plus
   `checktile.png`, the checkered start/finish line.
 - `assets/fence_tiles/` — the fence posts (11 pieces, named by which way their rails go:
@@ -149,14 +175,17 @@ Lobby, ready-up, kick, auto-start, and host migration are all handled server-sid
   on rivals to push them, side-bash anyone alongside (more eagerly when it would knock them
   off the road), ram anyone just ahead, hold grudges against whoever hit them last, and one
   of them hunts you. Pack pacing keeps them around you, so the fighting doesn't drift away.
-- **Cars**: drawn with sprite stacking (slices stacked for a pseudo-3D block) and a white
-  roof outline; each car floats its name + flag above it.
+- **Cars**: drawn with sprite stacking (slices stacked for a pseudo-3D block); each car
+  floats its name + flag above it. The whole sprite flashes **white** while it's bashing and
+  **red** when it gets bashed or smacks a fence, then back to its colour.
 - **Mystery boxes**: floating `?` boxes around the loop in three colours — yellow (speed
   boost), blue (+1 heart), red (instant bash recharge). Taken boxes respawn after 6 s.
-- **Laps & leaderboard**: 3 laps per race, a **3-2-1-GO** countdown at the start, and a live
-  leaderboard (flag + lap, eliminated karts drop to the bottom marked OUT). Current lap time
-  and best lap show top-centre; the results screen lists finishing order + each racer's best
-  lap.
+- **Camera & HUD**: the race view is zoomed in (`sim.ZOOM`); the HUD is hearts (top-left), a
+  live leaderboard with flags + `LAP x/y` (top-right, eliminated karts drop to the bottom
+  marked OUT), and a **minimap** (bottom-right) showing the road layout (white outline, faint
+  fill) with a dot per kart and yours highlighted.
+- **Laps**: 3 laps per race (set 3/5/7 in Settings), a **3-2-1-GO** countdown at the start;
+  the results screen lists finishing order + each racer's best lap.
 - **Hearts & game-over**: 3 hearts; lose half each time you leave the road. At 0 you're
   **eliminated** — your kart greys out and coasts to a stop (single-player ends in GAME OVER;
   multiplayer drops you to a spectator view of the leader until the race finishes).
@@ -167,6 +196,11 @@ Lobby, ready-up, kick, auto-start, and host migration are all handled server-sid
 - **Effects**: skid marks from real tyre slip, surface dust off-road, drift smoke, boost
   flames, collision sparks, screen shake.
 - **Position popups**: your place in the running order flashes up when it changes.
+- **Menus**: the STEER logo sits top-left, buttons are text-only stacked bottom-left, and the
+  backdrop is **live gameplay** (bots racing, or your paused race) rather than a static image.
+- **Fences**: baked one tile off the road so they read as a visible barrier while you drive.
+- **Performance**: the baked map is pre-scaled by `ZOOM` once per track, so each frame just
+  rotates it (fast) instead of rotate-and-scaling.
 - **Minimap**: a scaled view of the whole track in the bottom-right corner, a dot per kart
   with your own highlighted. The race view is zoomed in (`sim.ZOOM`).
 

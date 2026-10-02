@@ -62,3 +62,63 @@ Phase 1 (tests + baseline) and all of Phase 2 (known issues). Did **not** start 
 - Repo already had uncommitted stray files from earlier experiments (`assets/track_tiles/
   checktile1..4.png`) — I left them untouched (rules: don't delete/rename assets).
 - Tests point `main.PROFILE_PATH` at a temp dir; the real `~/.steer_profile.json` is untouched.
+
+---
+
+# Post-session feature work (owner-directed, same branch)
+
+**When:** Fri Oct 2 evening 2026 (continued on `claude/polish-20261002-1739`).
+Owner asked for a series of gameplay/UI/infra changes. All committed one-per-item; full test
+suite kept green (`python3 -m unittest discover tests` → **10 tests, OK**).
+
+## Commits (newest first)
+- `render.yaml`: wire optional Key Value (Redis) + `REDIS_URL` for multi-instance scaling.
+- `server.py`: optional **Redis pub/sub bus + registry** for multi-instance scaling
+  (owner-authoritative rooms) with in-memory fallback; added `Dockerfile` +
+  `docker-compose.yml` (server+redis) and `tests/test_redis.py` (cross-instance lobby).
+- `perf`: pre-zoom the baked ground once per map so `draw_ground` uses fast `rotate()` instead
+  of per-frame `rotozoom()`; timing test now asserts on the **min** frame time.
+- Car sprites flash **white** while bashing, **red** when bashed / hitting a fence; **live
+  attract gameplay** behind the menus (replaces the static image).
+- **Hot reload for UI**: `main.py` edits auto-restart the process; `sim.py` reloads live in
+  menus too.
+- Menu restyle: **STEER logo** top-left, background-less **left-aligned buttons bottom-left**.
+- HUD: removed the bash meter + lap/best timer (lap count `x/y` stays under the leaderboard);
+  earlier moved the leaderboard top-right with no panel; blue pixel-rounded meter (since
+  removed).
+- Fences pulled to one tile off the road (`FENCE_OFFSET` 4→2) so the sprites are visible.
+- Minimap redrawn as road-layout only (white strokes + ~22% black fill) with kart markers.
+- Camera zoomed in (`ZOOM=1.3`) + corner minimap.
+
+## Tests
+- Added `tests/test_redis.py`: starts `redis-server` + two `server.py` instances and verifies
+  a lobby **hosted on instance A can be joined on instance B**, both get the same start seed,
+  and host state relays cross-instance. Skips automatically if `redis-server`/`redis` missing.
+- `tests/test_timing.py` now measures per-frame times and asserts on the **minimum** (intrinsic
+  cost) so a thermally-throttled/busy CI box doesn't false-fail; median logged for context.
+- Full suite: **10 tests, OK**. Cross-instance Redis path verified locally (host on :8801,
+  join on :8802, shared Redis on :6399 → same seed + relay). In-memory path unchanged.
+
+## Deploy to Render — NOT done (blocked on credentials)
+- `render whoami` → **unauthorized**; no `RENDER_API_KEY`. I cannot log into the owner's
+  Render account, and a Blueprint deploy also needs the one-time **GitHub→Render OAuth** done
+  in the dashboard. Both require the owner. Also nothing is pushed (branch only).
+- **Connectivity verified locally instead**: started `server.py`, `GET /` → **200 OK**, and a
+  WebSocket `host` round-trip returned a room/code. The cross-instance Redis cluster test also
+  passes locally.
+- **To deploy** (owner): push this branch to GitHub → Render → New → Blueprint → pick the repo
+  → Apply (`render.yaml` provisions the web service + Key Value/Redis). Then I can test the
+  real `wss://…onrender.com` URL if you share it (or authenticate the Render CLI and I'll drive
+  it). Note: `render.yaml` uses `type: keyvalue`; if your account still exposes the older
+  `type: redis`, rename that one block.
+
+## Owner should check by eye / play
+- Sprite flashes (white while bashing, red on hit/wall) and the **live menu** backdrop.
+- Minimap readability over varied terrain; leaderboard legibility (outlined text, no panel).
+- Fence proximity (one tile off the road) — if it feels too tight, `FENCE_OFFSET=3`.
+- Perf: the pre-zoom change should hold 60fps; my test box was thermally throttled so absolute
+  ms readings here were inflated (hence the min-based timing assert).
+
+## How to undo
+- `git checkout main` returns to the pre-session state. This branch holds everything above;
+  `git branch -D claude/polish-20261002-1739` discards it.
