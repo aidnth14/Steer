@@ -35,54 +35,43 @@ class TestParticlesTracksGyro(unittest.TestCase):
         cam = sim.Camera(sim.Car(100, 100, 0, (255, 0, 0)))
         sim.draw_particles(screen, cam)
 
-    def test_permanent_tyre_tracks(self):
+    def test_thirteen_second_tyre_tracks(self):
         sim.new_map(807216)
-        self.assertIsNotNone(sim.GROUND_Z, "GROUND_Z should be built")
-        gw, gh = sim.GROUND_Z.get_size()
-        ox, oy = sim.GROUND_ORIGIN
-
         cars = sim.spawn_grid(1)
         car = cars[0]
         cam = sim.Camera(car)
+        screen = pygame.display.get_surface()
 
-        # Record a sample area on GROUND_Z where the car will drift
+        # Step 60 frames while drifting hard to lay down tyre tracks
         dt = 1.0 / 60.0
-        # Steer and drift hard to generate skid marks
         for _ in range(60):
             sim.step(dt, cars, [(0.8, None, True)])
             cam.update(dt, car)
 
-        # Check that skid marks were drawn onto GROUND_Z
-        # We search a bounding box around the car's initial area in GROUND_Z coords
-        zx = int((car.x - ox) * sim.ZOOM)
-        zy = int((car.y - oy) * sim.ZOOM)
-        min_x = max(0, zx - 100)
-        max_x = min(gw, zx + 100)
-        min_y = max(0, zy - 100)
-        max_y = min(gh, zy + 100)
+        self.assertGreater(len(car.trail), 10, "Continuous skid segments should be created in car.trail")
+        # Segments have 7 elements: [x0, y0, x1, y1, life, width, is_grass]
+        self.assertEqual(len(car.trail[0]), 7)
+        self.assertAlmostEqual(car.trail[-1][4], sim.TRAIL_LIFE, delta=0.5)
 
-        skid_color = (46, 28, 22)
-        found_skid_pixels = 0
-        for y in range(min_y, max_y, 2):
-            for x in range(min_x, max_x, 2):
-                col = tuple(sim.GROUND_Z.get_at((x, y)))[:3]
-                if col == skid_color or (abs(col[0] - 46) <= 4 and abs(col[1] - 28) <= 4 and abs(col[2] - 22) <= 4):
-                    found_skid_pixels += 1
+        # Test drawing trails on screen
+        sim.draw_trails(screen, cars, cam)
 
-        self.assertGreater(found_skid_pixels, 10, "Skid marks should be permanently drawn on GROUND_Z")
-
-        # Step another 60 frames without drift: previous skid marks MUST still exist on GROUND_Z!
-        for _ in range(60):
+        # Advance 10 seconds (600 steps) without drifting
+        for _ in range(600):
             sim.step(dt, cars, [(0.0, None, False)])
 
-        found_after = 0
-        for y in range(min_y, max_y, 2):
-            for x in range(min_x, max_x, 2):
-                col = tuple(sim.GROUND_Z.get_at((x, y)))[:3]
-                if col == skid_color or (abs(col[0] - 46) <= 4 and abs(col[1] - 28) <= 4 and abs(col[2] - 22) <= 4):
-                    found_after += 1
+        # At 10s into its 13s life, tyre tracks MUST still be present
+        self.assertGreater(len(car.trail), 0, "Tracks should still exist after 10 seconds")
 
-        self.assertGreaterEqual(found_after, found_skid_pixels, "Tyre tracks must remain permanently on GROUND_Z")
+        # Stop the car so no new skid marks are created while waiting
+        car.vx = car.vy = 0.0
+        # Advance another 4 seconds (total > 14s elapsed)
+        for _ in range(260):
+            car.vx = car.vy = 0.0
+            sim.step(dt, cars, [(0.0, None, False)])
+
+        # After 14 seconds (> 13.0s TRAIL_LIFE), tracks should be completely expired/cleared
+        self.assertEqual(len(car.trail), 0, "Tracks should cleanly fade out and expire after 13s")
 
     def test_mobile_tilt_simulation(self):
         # Verify sim.MOBILE_TILT maps to steering range
