@@ -60,7 +60,9 @@ def save_profile(d):
         print("profile save failed:", e)
 
 PLAYER_COLOR = (230, 60, 60)
-BOT_COLORS = [(60, 140, 230), (230, 200, 60), (160, 80, 220), (240, 140, 40), (90, 220, 190)]
+# one distinct colour per bot (races have up to 7 bots); none of them the player's red
+BOT_COLORS = [(60, 140, 230), (230, 200, 60), (160, 80, 220), (240, 140, 40),
+              (90, 220, 190), (235, 120, 180), (120, 200, 90), (80, 200, 235)]
 PLAYER_SLOT = 2     # start grid position: 0/1 = front row, 2 = second row left, ...
 
 # one distinct colour per multiplayer slot (up to 12 players)
@@ -74,6 +76,7 @@ BCAST_HZ = 20       # how often each client broadcasts its car state
 HELP_LINES = [
     "A / D or arrows / left stick: steer (the kart always drives)",
     "Q / E or LB / RB: side-bash     SPACE or (A): ram",
+    "Shift or (B): drift (charge a mini-boost)",
     "Esc or Start: menu     R: reload sim.py",
 ]
 
@@ -401,6 +404,8 @@ def main():
 
         # ---- drain anything the server sent since last frame ----------------------
         if netc is not None:
+            if netc.waking():
+                net_msg = "Waking the server..."
             for m in netc.poll():
                 mt = m.get("t")
                 if mt == "netopen":

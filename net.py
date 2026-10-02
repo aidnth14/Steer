@@ -12,6 +12,7 @@ import json
 import os
 import queue
 import threading
+import time
 
 import websockets
 
@@ -28,12 +29,19 @@ class Net:
         self._ws = None
         self._out = None            # asyncio.Queue, created inside the loop
         self._thread = None
+        self._connect_t = 0.0
 
     # ---- public, called from the game thread ------------------------------------
     def connect(self):
         self.status = "connecting"
+        self._connect_t = time.monotonic()
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
+
+    def waking(self):
+        # Render's free plan can take up to a minute to wake from idle; tell the UI if the
+        # connection is taking a while so it can say so
+        return self.status == "connecting" and (time.monotonic() - self._connect_t) > 5.0
 
     def send(self, obj):
         loop, out = self._loop, self._out
@@ -50,9 +58,9 @@ class Net:
         return msgs
 
     def close(self):
-        loop = self._loop
-        if loop is not None:
-            loop.call_soon_threadsafe(lambda: self._out.put_nowait(None))
+        loop, out = self._loop, self._out
+        if loop is not None and out is not None:
+            loop.call_soon_threadsafe(out.put_nowait, None)
 
     # ---- background thread ------------------------------------------------------
     def _run(self):
@@ -69,7 +77,7 @@ class Net:
 
     async def _session(self):
         self._out = asyncio.Queue()
-        async with websockets.connect(self.url, ping_interval=20, open_timeout=10) as ws:
+        async with websockets.connect(self.url, ping_interval=20, open_timeout=60) as ws:
             self._ws = ws
             self.status = "connected"
             self._in.put({"t": "netopen"})

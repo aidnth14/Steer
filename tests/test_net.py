@@ -9,7 +9,16 @@ import unittest
 
 import websockets
 
+import net
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+class TestNetClient(unittest.TestCase):
+    def test_close_before_connect_is_safe(self):
+        n = net.Net("ws://127.0.0.1:1")     # never connected
+        n.close()                           # must not raise
+        self.assertEqual(n.poll(), [])
 
 
 def free_port():

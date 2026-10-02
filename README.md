@@ -27,8 +27,8 @@ Bashes share one cooldown (1.5 s); the bar under your hearts shows when it's rea
 
 **Controllers** (Xbox / PlayStation / Nintendo, via SDL's game-controller layer — one
 mapping works for all three): left stick / d-pad steer, **LB / RB** side-bash, **A** ram,
-**Start** pause. Menus: d-pad to move, **A** confirm, **B** back; in a lobby **A** toggles
-ready. Hot-plug supported.
+**hold B** drift, **Start** pause. Menus: d-pad to move, **A** confirm, **B** back; in a
+lobby **A** toggles ready. Hot-plug supported.
 
 ## Before a race
 
