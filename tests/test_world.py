@@ -56,6 +56,18 @@ class TestWorld(unittest.TestCase):
                     self.assertEqual(sim.dist_to_dirt(b["x"], b["y"], 60.0), 0.0,
                                      "mystery box off the road")
 
+    def test_ground_opacity(self):
+        # Fences and checkered line are loaded with per-pixel alpha; ensure that blitting them
+        # onto the baked ground surface never zeroes out destination alpha (which causes blackouts)
+        sim.new_map(733141)
+        ox, oy = sim.GROUND_ORIGIN
+        for gx, gy, _ in sim.FENCES[:30]:
+            px, py = gx * sim.TILE - ox, gy * sim.TILE - oy
+            for dy in range(sim.TILE):
+                for dx in range(sim.TILE):
+                    self.assertEqual(sim.GROUND_SURF.get_at((px + dx, py + dy))[3], 255,
+                                     "fence pixel on GROUND_SURF has non-opaque alpha")
+
 
 if __name__ == "__main__":
     unittest.main()

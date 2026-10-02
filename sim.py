@@ -700,6 +700,7 @@ def _build_zoomed_ground():
         return
     gw, gh = GROUND_SURF.get_size()
     GROUND_Z = pygame.transform.smoothscale(GROUND_SURF, (round(gw * ZOOM), round(gh * ZOOM)))
+    GROUND_Z.fill((0, 0, 0, 255), special_flags=pygame.BLEND_RGBA_MAX)
 
 def _bake_finish(surf, ox, oy):
     # checkered start/finish line baked across the road at the start, aligned to the road
@@ -759,6 +760,9 @@ def build_ground():
             surf.fill(FENCE_COLOR, (px + 3, py + 1, 11, 13))
         else:
             surf.blit(tile, (px, py))
+    # blitting SRCALPHA tiles (fences + checkered line) zeroes out destination alpha in SDL;
+    # restore full opacity so fences never black out under window composition or menu dimming
+    surf.fill((0, 0, 0, 255), special_flags=pygame.BLEND_RGBA_MAX)
     GROUND_SURF = surf
     _build_zoomed_ground()
 
@@ -1658,6 +1662,7 @@ def draw_ground(screen, cam):
     wcy = (top + _CHUNK / 2) / ZOOM + oy
     sx, sy = cam.to_screen(wcx, wcy)
     screen.blit(rot, rot.get_rect(center=(round(sx), round(sy))))
+    screen.fill((0, 0, 0, 255), special_flags=pygame.BLEND_RGBA_MAX)
 
 def _get_overlay():
     global _overlay

@@ -89,6 +89,12 @@ suite kept green (`python3 -m unittest discover tests` → **10 tests, OK**).
 - Fences pulled to one tile off the road (`FENCE_OFFSET` 4→2) so the sprites are visible.
 - Minimap redrawn as road-layout only (white strokes + ~22% black fill) with kart markers.
 - Camera zoomed in (`ZOOM=1.3`) + corner minimap.
+- **Fence blackout bug fixed**: blitting `SRCALPHA` tiles (fence pieces and checkered finish line)
+  onto a 32-bit display-format Surface in SDL zeroes out destination alpha on those pixels. On macOS
+  Cocoa/Retina window composition and in menus where a semi-transparent `_dim` overlay is applied,
+  any pixels with `alpha == 0` rendered as pitch black or transparent to desktop. Fixed by enforcing
+  full opacity (`alpha = 255`) on `GROUND_SURF`, `GROUND_Z`, and `screen` using `BLEND_RGBA_MAX`.
+  Added `test_ground_opacity` to verify zero-alpha never recurs on ground surfaces.
 
 ## Tests
 - Added `tests/test_redis.py`: starts `redis-server` + two `server.py` instances and verifies
@@ -96,8 +102,7 @@ suite kept green (`python3 -m unittest discover tests` → **10 tests, OK**).
   and host state relays cross-instance. Skips automatically if `redis-server`/`redis` missing.
 - `tests/test_timing.py` now measures per-frame times and asserts on the **minimum** (intrinsic
   cost) so a thermally-throttled/busy CI box doesn't false-fail; median logged for context.
-- Full suite: **10 tests, OK**. Cross-instance Redis path verified locally (host on :8801,
-  join on :8802, shared Redis on :6399 → same seed + relay). In-memory path unchanged.
+- Full suite: **11 tests, OK** (including `test_ground_opacity`). Cross-instance Redis path verified locally.
 
 ## Deploy to Render — NOT done (blocked on credentials)
 - `render whoami` → **unauthorized**; no `RENDER_API_KEY`. I cannot log into the owner's
