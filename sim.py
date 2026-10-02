@@ -150,8 +150,9 @@ DIRT_COLOR = (184, 111, 80)
 # ---- fences ---------------------------------------------------------------------
 # A fence runs along each side of the road (outside the loop and around the infield),
 # FENCE_OFFSET cells out from the road, so there's a strip of grass to run wide onto (and
-# lose a heart) before you hit it. 4 = three tiles (48 px) of grass, then the fence.
-FENCE_OFFSET = 4
+# lose a heart) before you hit it. 2 = one tile (16 px) of grass, then the fence -- close
+# enough to the road that the fence sprites are actually visible while you drive.
+FENCE_OFFSET = 2
 # a fence cell's collision box within its 16 px cell: the post (x0, y0, x1, y1), stretched to
 # the cell edge on every side a rail continues, so a run of fence is one flat wall to scrape along
 FENCE_POST = (3, 1, 14, 14)
