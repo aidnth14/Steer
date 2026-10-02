@@ -1,0 +1,13 @@
+# Render Blueprint for the Steer multiplayer server.
+# Push this repo to GitHub, then on Render: New -> Blueprint -> pick this repo.
+# Render injects $PORT; server.py binds 0.0.0.0:$PORT and speaks WebSocket (wss://).
+# The public URL it gives you (wss://steer-server.onrender.com) is what clients set as
+# STEER_SERVER_URL.
+services:
+  - type: web
+    name: steer-server
+    runtime: python
+    plan: free
+    buildCommand: pip install "websockets>=12"
+    startCommand: python server.py
+    healthCheckPath: /

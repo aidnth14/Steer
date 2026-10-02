@@ -74,6 +74,50 @@ def get_flag(code, h):
         w = max(1, round(img.get_width() * h / img.get_height()))
         _FLAG_CACHE[key] = pygame.transform.scale(img, (w, h))
     return _FLAG_CACHE[key]
+
+# ---- sound -------------------------------------------------------------------------
+SOUND_DIR = os.path.join(ASSET_DIR, "sound")
+SOUND_FILES = {
+    "bash":     "bash.mp3",
+    "death":    "death.mp3",
+    "powerup":  "powerup.mp3",
+    "powerup2": "powerup2.mp3",
+    "crash":    "break.wav",
+    "bump":     "bullet_collision.mp3",
+}
+SOUND_VOL = {"bash": 0.5, "death": 0.9, "powerup": 0.7, "powerup2": 0.7, "crash": 0.6, "bump": 0.4}
+SOUNDS = {}
+_mixer_ready = False
+
+def init_audio():
+    global _mixer_ready
+    if _mixer_ready:
+        return
+    try:
+        pygame.mixer.init()
+        _mixer_ready = True
+    except pygame.error as e:
+        print("audio unavailable:", e)
+
+def load_sounds():
+    SOUNDS.clear()
+    if not _mixer_ready:
+        return
+    for key, fn in SOUND_FILES.items():
+        try:
+            s = pygame.mixer.Sound(os.path.join(SOUND_DIR, fn))
+            s.set_volume(SOUND_VOL.get(key, 0.6))
+            SOUNDS[key] = s
+        except (pygame.error, FileNotFoundError):
+            pass
+
+def play(name):
+    s = SOUNDS.get(name)
+    if s is not None:
+        try:
+            s.play()
+        except pygame.error:
+            pass
 FONT_PATH = os.path.join(ASSET_DIR, "font", "Jersey25-Regular.ttf")
 UI = {}             # UI icon surfaces by name
 _FONT_CACHE = {}
@@ -305,6 +349,8 @@ def load_assets():
         except (pygame.error, FileNotFoundError) as e:
             print(f"UI icon {name} missing:", e)
     load_flags()
+    init_audio()
+    load_sounds()
 
     for key in OLD_DECOS:
         try:
@@ -892,6 +938,7 @@ class Car:
         self.wedged = 0.0           # seconds spent barely moving (backing up included)
         # bots only
         self.is_bot = False
+        self.is_remote = False      # true for other players' cars in multiplayer (driven by net)
         self.name = "You"
         self.flag = None            # 2-letter flag code, or None
         self.aggression = 0.0
@@ -934,6 +981,7 @@ class Car:
         self.bash_kind = kind
         self.bash_cd = BASH_COOLDOWN
         self.bash_hits = set()
+        play("bash")
         return True
 
     def integrate(self, h, steer_in):
@@ -1025,6 +1073,7 @@ class Car:
         if self.was_on_road and not on_road and self.heart_cooldown <= 0.0:
             self.hearts = max(0.0, self.hearts - HEART_PENALTY)
             self.heart_cooldown = HEART_COOLDOWN
+            play("death" if self.hearts <= 0.0 else "crash")
         self.was_on_road = on_road
 
         # wedged against something? back up for a moment; still stuck after that -> rescue
@@ -1315,6 +1364,11 @@ def step(dt, cars, controls):
         if car.track_s is not None:
             car.progress += (s - car.track_s + ROAD_LEN / 2) % ROAD_LEN - ROAD_LEN / 2
         car.track_s = s
+    hit = max((c.impact for c in cars), default=0.0)   # one impact sound per frame, hardest hit
+    if hit > 180:
+        play("crash")
+    elif hit > 80:
+        play("bump")
     _pack_pacing(cars)
     _update_boxes(dt, cars)
     _update_particles(dt)
@@ -1494,6 +1548,7 @@ def give_powerup(car, kind):
     elif kind == "bash":
         car.bash_cd = 0.0               # instant bash recharge
     car.flash = max(car.flash, 0.25)
+    play("powerup2" if kind == "heart" else "powerup")
     return kind
 
 def _update_boxes(dt, cars):
@@ -1517,6 +1572,27 @@ def lap_of(car):
     if ROAD_LEN <= 1.0:
         return 0
     return max(0, int(car.progress / ROAD_LEN))
+
+# ---- multiplayer car sync ----------------------------------------------------------
+_NET_SNAP = ("vx", "vy", "omega", "steer_angle", "flash", "bash_time",
+             "boost_time", "hearts", "progress", "slip_f", "slip_r")
+
+def car_net_state(car):
+    d = {"x": car.x, "y": car.y, "angle": car.angle}
+    for k in _NET_SNAP:
+        d[k] = getattr(car, k)
+    return d
+
+def apply_net_state(car, d, t=1.0):
+    # move a remote car toward the latest snapshot: lerp pose for smoothness, snap the rest
+    if not d:
+        return
+    car.x = (car.x + wrap_delta(car.x, d["x"]) * t) % WORLD
+    car.y = (car.y + wrap_delta(car.y, d["y"]) * t) % WORLD
+    car.angle = lerp_angle(car.angle, d["angle"], t)
+    for k in _NET_SNAP:
+        if k in d:
+            setattr(car, k, d[k])
 
 
 # =================================================================================================

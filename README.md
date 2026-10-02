@@ -22,17 +22,70 @@ python3 main.py
 
 Bashes share one cooldown (1.5 s); the bar under your hearts shows when it's ready.
 
+**Controllers** (Xbox / PlayStation / Nintendo, via SDL's game-controller layer — one
+mapping works for all three): left stick / d-pad steer, **LB / RB** side-bash, **A** ram,
+**Start** pause. Menus: d-pad to move, **A** confirm, **B** back; in a lobby **A** toggles
+ready. Hot-plug supported.
+
 ## Before a race
 
-Hitting **Play** / **New Race** opens the name screen: type your name, then pick a flag
-(`<` / `>` buttons or the arrow keys cycle through 255 country flags). Bots get random
-names and flags automatically. Each race drops in 5–7 bots on a fresh random track.
+**Play** opens **Singleplayer / Multiplayer**. Either way you first hit the name screen:
+type your name, then pick a flag (`<` / `>` buttons or the arrow keys cycle through 255
+country flags).
+
+- **Singleplayer** — 5–7 bots (random names + flags) on a fresh random track.
+- **Multiplayer** — see below.
+
+## Multiplayer (online co-op)
+
+Real-time racing against friends over the internet. A small relay server (`server.py`)
+holds the lobbies and forwards each player's car state; everyone runs the race locally and
+stays in sync.
+
+**Flow:** Play → Multiplayer → **Host** or **Join**.
+- **Host:** choose max players (2–12) and create a lobby. You get a **6-character code**;
+  the lobby is named after you.
+- **Join:** type a friend's 6-character code.
+- In the **lobby** everyone sees the player list (name + flag + ready state). Each player
+  has a **Ready / Unready** button; the host can **kick** anyone (the red `x`). When every
+  player is ready (min 2), the race **starts automatically** on the same track for all.
+
+### Running the server
+
+Locally:
+
+```
+PORT=8765 python server.py
+# then point the game at it:
+STEER_SERVER_URL=ws://localhost:8765 python main.py
+```
+
+On **Render** (free): push this repo to GitHub → Render → **New → Blueprint** → pick the
+repo (`render.yaml` provisions a Web Service running `server.py`). Render gives you a URL
+like `https://steer-server.onrender.com`; players then launch with:
+
+```
+STEER_SERVER_URL=wss://steer-server.onrender.com python main.py
+```
+
+(The client reads `STEER_SERVER_URL`; default is `ws://localhost:8765`.)
+
+### How the netcode works
+
+Each client simulates **only its own car** with full physics and broadcasts its state
+~20×/s; the server relays those snapshots to the rest of the room, and remote cars are
+smoothly interpolated toward them. No central physics, so the server stays cheap. Lobby,
+ready-up, kick, auto-start, and host migration are all handled server-side.
 
 ## Files
 
-- `main.py` — window, menus, input, game loop, hot reload.
-- `sim.py` — everything else: track, scenery, physics, collisions, bots, camera, drawing.
-  Edit + save it and the running game picks the change up live (state carries over).
+- `main.py` — window, menus, input (keyboard + Xbox/PS/Nintendo controllers), game loop,
+  multiplayer lobby UI, hot reload.
+- `sim.py` — everything else: track, scenery, physics, collisions, bots, camera, drawing,
+  sound, car state (de)serialization for multiplayer. Edit + save it and the running
+  single-player game picks the change up live (state carries over).
+- `net.py` — client networking: a background WebSocket thread the game polls each frame.
+- `server.py` — the multiplayer relay/lobby server (deploy to Render; see Multiplayer).
 - `assets/track_tiles/` — the dirt-on-grass road tiles (9-slice + 4 inner corners) plus
   `checktile.png`, the checkered start/finish line.
 - `assets/bush_tiles/` — the square bush (9 pieces) and round bush (4 pieces).
@@ -76,8 +129,9 @@ names and flags automatically. Each race drops in 5–7 bots on a fresh random t
 
 ## Not built yet
 
-- No game-over state when hearts hit 0.
-- No sound.
+- No game-over state when hearts hit 0 (a `death` sound plays, but the car keeps going).
+- Multiplayer has no player-vs-player physics authority — remote cars are interpolated
+  from their own snapshots, so collisions between players are approximate.
 
 ## Tuning (all constants at the top of `sim.py`)
 
