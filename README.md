@@ -45,7 +45,8 @@ country flags).
 - **Time Trial** — solo against a **ghost** of your best lap (replayed as a faint outline).
 - **Elimination** — every 8 s the last-place kart is knocked out; last one standing wins.
 - **Battle** — survival: no laps, last kart with hearts left wins.
-- **Team Race** — karts split into red/blue teams.
+- **Team Race** — karts split into red/blue teams; the results screen tallies each team's
+  finishing positions (lower total wins) and names the winning team.
 
 ### Settings & profile
 
@@ -170,7 +171,6 @@ Lobby, ready-up, kick, auto-start, and host migration are all handled server-sid
   **reconnect-to-same-slot** are the next planned step.
 - Game modes (Time Trial / Elimination / Battle / Team) are single-player only so far;
   multiplayer is plain Race.
-- Team Race assigns red/blue teams and colours but doesn't yet tally a shared team score.
 
 ## Tuning (all constants at the top of `sim.py`)
 

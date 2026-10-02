@@ -243,6 +243,7 @@ def main():
     countdown = 0.0             # 3..0 pre-race lock
     go_timer = 0.0              # brief "GO!" flash
     end_title = "FINISH"        # results-screen title ("FINISH" / "GAME OVER")
+    team_result = ""            # winning-team line shown on results in Team Race
 
     back_btn = Button((sim.W / 2 - 100, 306, 200, 44), "Back")
     start_btn = Button((sim.W / 2 - 100, 256, 200, 42), "Start Race")
@@ -880,6 +881,15 @@ def main():
                         end, end_title = True, "GAME OVER"
                     if end:
                         final_order = sorted(cars, key=lambda c: (c.dead, -c.progress))
+                        team_result = ""
+                        if game_mode == "team":     # finishing-position points, lower = better
+                            sc = {0: 0, 1: 0}
+                            for pos, c in enumerate(final_order):
+                                if c.team in sc:
+                                    sc[c.team] += pos + 1
+                            win = "RED" if sc[0] < sc[1] else "BLUE" if sc[1] < sc[0] else "TIED"
+                            team_result = (f"{win} TEAM WINS" if win != "TIED" else "TEAMS TIED") + \
+                                f"   (red {sc[0]} / blue {sc[1]}, lower is better)"
                         profile["races"] = profile.get("races", 0) + 1
                         if final_order and final_order[0] is player:
                             profile["wins"] = profile.get("wins", 0) + 1
@@ -966,7 +976,10 @@ def main():
         elif state == "results":
             draw_bg()
             title = font_big.render(end_title, True, (255, 255, 255))
-            screen.blit(title, title.get_rect(center=(sim.W / 2, 40)))
+            screen.blit(title, title.get_rect(center=(sim.W / 2, 36)))
+            if team_result:
+                tr = font_small.render(team_result, True, (255, 235, 120))
+                screen.blit(tr, tr.get_rect(center=(sim.W / 2, 66)))
             hdr = font_small.render("best lap", True, (170, 185, 165))
             screen.blit(hdr, hdr.get_rect(midright=(sim.W / 2 + 170, 78)))
             for i, c in enumerate(final_order):
