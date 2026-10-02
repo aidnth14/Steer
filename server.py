@@ -165,7 +165,10 @@ async def handler(ws):
                         pass
 
             elif t in ("state", "box", "bots", "finished"):
-                # in-race traffic: relay to the rest of the room, tagged with the sender id
+                # in-race traffic: relay to the rest of the room, tagged with the sender id.
+                # bots / box / finished are authoritative -> only the host may send them.
+                if t in ("box", "bots", "finished") and me.id != room.host_id:
+                    continue
                 await broadcast(room, {**msg, "id": me.id}, exclude=ws)
     finally:
         if room is not None and me is not None:
