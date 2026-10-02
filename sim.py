@@ -316,21 +316,25 @@ def wrap_delta(a, b):
 # =================================================================================================
 TILES = None        # 3x3 road tiles, [row][col] as in TRACK_TILE_NAMES
 INNER = None        # 2x2 inner-corner road tiles, [qy][qx]
-CHECK = None        # checkered finish-line tile
+CHECK = None        # checkered finish-line tile (center)
+CHECK_TILES = {}    # center, left, right, top, bottom check tiles
 FENCE = {}          # (up, down, left, right) -> 16 px fence piece, all 16 combinations
 
 def load_assets():
     # needs a display surface to exist (convert); called at startup and after each hot reload
-    global TILES, INNER, GRASS_COLOR, DIRT_COLOR
+    global TILES, INNER, GRASS_COLOR, DIRT_COLOR, CHECK, CHECK_TILES
     TILES = INNER = None
     FENCE.clear()
+    CHECK_TILES.clear()
 
     grid = [[None] * 3 for _ in range(3)]
-    global CHECK
-    try:
-        CHECK = _load(TRACK_TILE_DIR, "checktile", alpha=True)
-    except (pygame.error, FileNotFoundError):
-        CHECK = None
+    for key, fn in (("center", "checktile"), ("left", "checktile1"), ("right", "checktile2"),
+                    ("top", "checktile3"), ("bottom", "checktile4")):
+        try:
+            CHECK_TILES[key] = _load(TRACK_TILE_DIR, fn, alpha=True)
+        except (pygame.error, FileNotFoundError):
+            CHECK_TILES[key] = None
+    CHECK = CHECK_TILES.get("center")
     try:
         for r in range(3):
             for c in range(3):
@@ -407,38 +411,160 @@ ROAD_LEN = 1.0
 DIRT = bytearray(GRID_N * GRID_N)       # 1 = road cell
 ROAD_NEAR = bytearray(GRID_N * GRID_N)  # cells from the nearest road cell (capped); fences go where it's FENCE_OFFSET
 
+TRACK_SHAPES = ["stadium", "peanut", "teardrop", "tri_oval", "chicane", "kidney"]
+
+def _catmull_rom(pts, total_samples=280):
+    n = len(pts)
+    res = []
+    num_per_seg = total_samples // n
+    rem = total_samples - num_per_seg * n
+    for i in range(n):
+        p0 = pts[(i - 1) % n]
+        p1 = pts[i]
+        p2 = pts[(i + 1) % n]
+        p3 = pts[(i + 2) % n]
+        steps = num_per_seg + (1 if i < rem else 0)
+        for s in range(steps):
+            t = s / steps
+            t2 = t * t
+            t3 = t2 * t
+            x = 0.5 * ((2 * p1[0]) + (-p0[0] + p2[0]) * t + (2 * p0[0] - 5 * p1[0] + 4 * p2[0] - p3[0]) * t2 + (-p0[0] + 3 * p1[0] - 3 * p2[0] + p3[0]) * t3)
+            y = 0.5 * ((2 * p1[1]) + (-p0[1] + p2[1]) * t + (2 * p0[1] - 5 * p1[1] + 4 * p2[1] - p3[1]) * t2 + (-p0[1] + 3 * p1[1] - 3 * p2[1] + p3[1]) * t3)
+            res.append((x, y))
+    return res
+
 def generate_road(seed):
-    # a "stadium" loop: two straights + two semicircle turns, so it can never cross or pass
-    # close to itself; a gentle sideways wobble on the straights keeps it from being a plain oval
+    # Procedurally selects between distinct racing track shapes:
+    # 0: Stadium Oval (gentle wobble on the back straight)
+    # 1: Peanut / Dogbone (waisted top straight dipping into the infield)
+    # 2: Teardrop (asymmetric: high-speed sweeper vs tight technical hairpin)
+    # 3: Tri-Oval / Delta (3 banking corners with 3 straights)
+    # 4: Technical Chicane / S-Loop (chicane complex on backstretch)
+    # 5: Kidney Bean (sweeping outer bulge with indented curve)
+    # All layouts maintain a flat bottom straight around GRID_START for clean starting alignment.
     rnd = random.Random(seed)
+    shape_idx = rnd.randrange(len(TRACK_SHAPES))
     cx, cy = WORLD / 2, WORLD / 2
-    A = rnd.uniform(550, 750)   # half-length of each straight
-    R = rnd.uniform(420, 550)   # turn radius
-    wobble_amp = R * 0.12
-    wobble_freq = rnd.choice([2, 3])
-    wobble_phase = rnd.uniform(0, math.tau)
-
-    def wob(u):
-        return wobble_amp * math.sin(wobble_freq * u + wobble_phase)
-
+    A = rnd.uniform(560, 720)
+    R = rnd.uniform(430, 520)
     n_straight, n_arc = 80, 60
     pts = []
-    for i in range(n_straight):   # bottom straight, left -> right
-        t = i / n_straight
-        taper = math.sin(math.pi * t)   # fades to 0 at both ends so it meets the turns cleanly
-        pts.append((cx - A + 2 * A * t, cy + R + wob(t * math.tau) * taper))
-    for i in range(n_arc):        # right turn
-        t = i / n_arc
-        ang = math.pi / 2 - math.pi * t
-        pts.append((cx + A + R * math.cos(ang), cy + R * math.sin(ang)))
-    for i in range(n_straight):   # top straight, right -> left
-        t = i / n_straight
-        taper = math.sin(math.pi * t)
-        pts.append((cx + A - 2 * A * t, cy - R + wob(t * math.tau + math.pi) * taper))
-    for i in range(n_arc):        # left turn
-        t = i / n_arc
-        ang = -math.pi / 2 - math.pi * t
-        pts.append((cx - A + R * math.cos(ang), cy + R * math.sin(ang)))
+
+    if shape_idx == 0:  # Stadium Oval
+        wob_amp = R * rnd.uniform(0.08, 0.14)
+        wob_f = rnd.choice([2, 3])
+        wob_p = rnd.uniform(0, math.tau)
+        for i in range(n_straight):
+            t = i / n_straight
+            w = wob_amp * math.sin(wob_f * t * math.tau + wob_p) * max(0.0, (t - 0.45) / 0.55)
+            pts.append((cx - A + 2 * A * t, cy + R + w))
+        for i in range(n_arc):
+            t = i / n_arc
+            ang = math.pi / 2 - math.pi * t
+            pts.append((cx + A + R * math.cos(ang), cy + R * math.sin(ang)))
+        for i in range(n_straight):
+            t = i / n_straight
+            w = wob_amp * math.sin(wob_f * t * math.tau + wob_p + math.pi) * math.sin(math.pi * t)
+            pts.append((cx + A - 2 * A * t, cy - R + w))
+        for i in range(n_arc):
+            t = i / n_arc
+            ang = -math.pi / 2 - math.pi * t
+            pts.append((cx - A + R * math.cos(ang), cy + R * math.sin(ang)))
+
+    elif shape_idx == 1:  # Peanut / Dogbone
+        dip = rnd.uniform(160, 240)
+        for i in range(n_straight):
+            t = i / n_straight
+            pts.append((cx - A + 2 * A * t, cy + R))
+        for i in range(n_arc):
+            t = i / n_arc
+            ang = math.pi / 2 - math.pi * t
+            pts.append((cx + A + R * math.cos(ang), cy + R * math.sin(ang)))
+        for i in range(n_straight):
+            t = i / n_straight
+            w = dip * math.sin(math.pi * t)
+            pts.append((cx + A - 2 * A * t, cy - R + w))
+        for i in range(n_arc):
+            t = i / n_arc
+            ang = -math.pi / 2 - math.pi * t
+            pts.append((cx - A + R * math.cos(ang), cy + R * math.sin(ang)))
+
+    elif shape_idx == 2:  # Teardrop
+        R_tight = rnd.uniform(340, 390)
+        R_wide = rnd.uniform(540, 600)
+        for i in range(n_straight):
+            t = i / n_straight
+            blend = 0.5 * (1 - math.cos(math.pi * max(0.0, (t - 0.4) / 0.6)))
+            y = (cy + R_tight) + (R_wide - R_tight) * blend
+            pts.append((cx - A + 2 * A * t, y))
+        for i in range(n_arc):
+            t = i / n_arc
+            ang = math.pi / 2 - math.pi * t
+            pts.append((cx + A + R_wide * math.cos(ang), cy + R_wide * math.sin(ang)))
+        for i in range(n_straight):
+            t = i / n_straight
+            y = (cy - R_wide) + (R_wide - R_tight) * t
+            pts.append((cx + A - 2 * A * t, y))
+        for i in range(n_arc):
+            t = i / n_arc
+            ang = -math.pi / 2 - math.pi * t
+            pts.append((cx - A + R_tight * math.cos(ang), cy + R_tight * math.sin(ang)))
+
+    elif shape_idx == 3:  # Tri-Oval / Delta
+        R_bot = rnd.uniform(430, 490)
+        R_top = rnd.uniform(520, 600)
+        ctrl_pts = [
+            (cx - A, cy + R_bot),
+            (cx - A / 3, cy + R_bot),
+            (cx + A / 3, cy + R_bot),
+            (cx + A, cy + R_bot),
+            (cx + A + 240, cy + R_bot - 190),
+            (cx + A / 2 + 100, cy - R_top / 2),
+            (cx + 150, cy - R_top),
+            (cx, cy - R_top - 50),
+            (cx - 150, cy - R_top),
+            (cx - A / 2 - 100, cy - R_top / 2),
+            (cx - A - 240, cy + R_bot - 190),
+        ]
+        pts = _catmull_rom(ctrl_pts, 280)
+
+    elif shape_idx == 4:  # Technical Chicane / S-Loop
+        chicane_amp = rnd.uniform(140, 200)
+        for i in range(n_straight):
+            t = i / n_straight
+            pts.append((cx - A + 2 * A * t, cy + R))
+        for i in range(n_arc):
+            t = i / n_arc
+            ang = math.pi / 2 - math.pi * t
+            pts.append((cx + A + R * math.cos(ang), cy + R * math.sin(ang)))
+        for i in range(n_straight):
+            t = i / n_straight
+            w = chicane_amp * math.sin(2 * math.pi * t)
+            pts.append((cx + A - 2 * A * t, cy - R + w))
+        for i in range(n_arc):
+            t = i / n_arc
+            ang = -math.pi / 2 - math.pi * t
+            pts.append((cx - A + R * math.cos(ang), cy + R * math.sin(ang)))
+
+    elif shape_idx == 5:  # Kidney Bean
+        bulge = rnd.uniform(150, 220)
+        for i in range(n_straight):
+            t = i / n_straight
+            pts.append((cx - A + 2 * A * t, cy + R))
+        for i in range(n_arc):
+            t = i / n_arc
+            ang = math.pi / 2 - math.pi * t
+            r_curr = R + bulge * math.sin(math.pi * t)
+            pts.append((cx + A + r_curr * math.cos(ang), cy + R * math.sin(ang)))
+        for i in range(n_straight):
+            t = i / n_straight
+            w = -bulge * 0.7 * math.sin(math.pi * t)
+            pts.append((cx + A - 2 * A * t, cy - R + w))
+        for i in range(n_arc):
+            t = i / n_arc
+            ang = -math.pi / 2 - math.pi * t
+            pts.append((cx - A + R * math.cos(ang), cy + R * math.sin(ang)))
+
     return pts
 
 def _road_tables(road):
@@ -704,18 +830,59 @@ def _build_zoomed_ground():
 
 def _bake_finish(surf, ox, oy):
     # checkered start/finish line baked across the road at the start, aligned to the road
-    if CHECK is None or not ROAD:
+    if not CHECK_TILES.get("center") or not ROAD:
         return
     s0 = ROAD_S[GRID_START]
-    _, _, heading = road_pose(s0)
-    tile = pygame.transform.rotate(CHECK, -heading)     # face along the road
-    half = ROAD_WIDTH / 2
-    d = -half
-    while d <= half:
-        for along in (-TILE * 0.5, TILE * 0.5):         # a two-tile-deep band
-            wx, wy, _ = road_pose(s0 + along, d)
-            surf.blit(tile, tile.get_rect(center=(wx - ox, wy - oy)))
-        d += TILE
+    wx, wy, heading = road_pose(s0)
+
+    tc = CHECK_TILES.get("center")
+    t_left = CHECK_TILES.get("left") or tc
+    t_right = CHECK_TILES.get("right") or tc
+    t_top = CHECK_TILES.get("top") or tc
+    t_bot = CHECK_TILES.get("bottom") or tc
+
+    rad = math.radians(heading)
+    cos_h, sin_h = math.cos(rad), math.sin(rad)
+
+    # 15 tiles across (240px road width), 2 tiles deep (32px along track)
+    if abs(sin_h) < 0.707:
+        # Road is mostly horizontal (East or West)
+        band = pygame.Surface((32, 240), pygame.SRCALPHA)
+        top_tile = t_top if cos_h >= 0 else t_bot
+        bot_tile = t_bot if cos_h >= 0 else t_top
+        for row in range(15):
+            for col in range(2):
+                if row == 0:
+                    t = top_tile
+                elif row == 14:
+                    t = bot_tile
+                else:
+                    t = tc
+                band.blit(t, (col * 16, row * 16))
+        rot_angle = -heading if abs(heading) > 0.01 else 0
+    else:
+        # Road is mostly vertical (South or North)
+        band = pygame.Surface((240, 32), pygame.SRCALPHA)
+        left_tile = t_left if sin_h >= 0 else t_right
+        right_tile = t_right if sin_h >= 0 else t_left
+        for col in range(15):
+            for row in range(2):
+                if col == 0:
+                    t = left_tile
+                elif col == 14:
+                    t = right_tile
+                else:
+                    t = tc
+                band.blit(t, (col * 16, row * 16))
+        base_h = 90 if sin_h >= 0 else -90
+        rot_angle = -(heading - base_h)
+        if abs(rot_angle) < 0.01:
+            rot_angle = 0
+
+    if rot_angle != 0:
+        band = pygame.transform.rotate(band, rot_angle)
+
+    surf.blit(band, band.get_rect(center=(round(wx - ox), round(wy - oy))))
 
 def build_ground():
     # Bake the whole map into one image once, so each frame we just rotate the part around
@@ -1634,7 +1801,7 @@ def apply_net_state(car, d, t=1.0):
 # =================================================================================================
 # drawing
 # =================================================================================================
-ZOOM = 1.3          # camera zoom; >1 shows less of the world, bigger karts
+ZOOM = 1.45         # camera zoom; >1 shows less of the world, bigger karts
 # chunk is in *zoomed-ground* pixels and sized to still cover the screen once rotated. Using a
 # ground that's pre-scaled by ZOOM lets us rotate() each frame (fast) instead of rotozoom() (slow).
 _CHUNK = int(math.hypot(W, H)) + 6 * TILE
@@ -1879,8 +2046,8 @@ def draw_leaderboard(screen, cars, player):
     screen.blit(head, (x, y0 - 4))
     for i, c in enumerate(order):
         yc = y0 + 18 + i * row_h
-        name = c.name                      # the player's row is already highlighted yellow
-        color = (255, 235, 120) if c is player else (235, 235, 235)
+        name = c.name                      # the player's row is highlighted blue
+        color = (80, 190, 255) if c is player else (235, 235, 235)
         pygame.draw.circle(screen, c.color, (x + 6, yc + 8), 4)
         pygame.draw.circle(screen, (255, 255, 255), (x + 6, yc + 8), 4, 1)
         screen.blit(_text_outlined(font, f"{i + 1}.", color), (x + 12, yc))
@@ -1899,7 +2066,7 @@ def draw_leaderboard(screen, cars, player):
 
     # the player's lap count, x / y, under the board
     cur = min(lap_of(player) + 1, TOTAL_LAPS)
-    lap_s = _text_outlined(get_font(26), f"LAP {cur}/{TOTAL_LAPS}", (255, 235, 120))
+    lap_s = _text_outlined(get_font(26), f"LAP {cur}/{TOTAL_LAPS}", (80, 190, 255))
     screen.blit(lap_s, lap_s.get_rect(topright=(x + w - 6, y0 + 18 + len(order) * row_h + 4)))
 
 def _pixel_bar(screen, color, rect, r=2):

@@ -123,6 +123,9 @@ def migrate_car(old):
 def migrate_cam(old, car):
     return migrate(old, sim.Camera(car))
 
+UI_HIGHLIGHT = (80, 190, 255)   # vibrant cyan-blue highlight
+UI_POINTER = None
+
 class Button:
     def __init__(self, rect, label, align="center"):
         self.rect = pygame.Rect(rect)
@@ -131,26 +134,39 @@ class Button:
 
     def draw(self, screen, font, hover):
         # no background: just the label with a dark outline so it reads over anything
-        col = (255, 235, 120) if hover else (255, 255, 255)
+        col = UI_HIGHLIGHT if hover else (255, 255, 255)
         base = font.render(self.label, True, col)
         edge = font.render(self.label, True, (20, 20, 25))
         if self.align == "left":
-            r = base.get_rect(midleft=(self.rect.x + 2, self.rect.centery))
+            text_x = self.rect.x + (22 if UI_POINTER else 2)
+            r = base.get_rect(midleft=(text_x, self.rect.centery))
+            ptr_pos = (self.rect.x, self.rect.centery - (UI_POINTER.get_height() // 2 if UI_POINTER else 0))
         else:
             r = base.get_rect(center=self.rect.center)
+            ptr_pos = (r.left - 20, self.rect.centery - (UI_POINTER.get_height() // 2 if UI_POINTER else 0))
         for dx, dy in ((-2, 0), (2, 0), (0, -2), (0, 2), (-2, -2), (2, -2), (-2, 2), (2, 2)):
             screen.blit(edge, (r.x + dx, r.y + dy))
         screen.blit(base, r)
+        if hover and UI_POINTER:
+            screen.blit(UI_POINTER, ptr_pos)
 
     def clicked(self, pos):
         return self.rect.collidepoint(pos)
 
 def main():
+    global UI_POINTER
     pygame.init()
     screen = pygame.display.set_mode((sim.W, sim.H))
     pygame.display.set_caption("Steer")
     clock = pygame.time.Clock()
     sim.load_assets()
+
+    ptr_path = os.path.join(sim.ASSET_DIR, "Sprite-0001.png")
+    if os.path.exists(ptr_path):
+        try:
+            UI_POINTER = pygame.image.load(ptr_path).convert_alpha()
+        except pygame.error:
+            UI_POINTER = None
 
     sdlctrl.init()
     pads = {}       # instance id -> open Controller
@@ -241,7 +257,7 @@ def main():
     sim.TOTAL_LAPS = int(profile.get("laps", 3))
 
     state = "menu"
-    menu_sel = 0                # highlighted menu row for controller / keyboard nav
+    menu_sel = mode_sel = gamemode_sel = mp_sel = 0  # highlighted menu row for controller / keyboard nav
     current_seed = sim.ROAD_SEED
     player_name = profile.get("name", "Player")
     _pf = profile.get("flag", "us")
@@ -567,12 +583,41 @@ def main():
         mode_y0 = sim.H - 14 - bh * len(mode_items)
         mode_buttons = [(nm, Button((16, mode_y0 + i * bh, 260, bh), lbl, align="left"))
                         for i, (nm, lbl) in enumerate(mode_items)]
+        mode_sel = max(0, min(mode_sel, len(mode_buttons) - 1))
 
         gamemode_buttons = []
         gy = 90
         for mk, mlabel in GAME_MODES:
             gamemode_buttons.append((mk, Button((sim.W / 2 - 110, gy, 220, 36), mlabel)))
             gy += 42
+        gamemode_sel = max(0, min(gamemode_sel, len(gamemode_buttons)))
+        mp_sel = max(0, min(mp_sel, 2))
+
+        # Mouse hover updates selection index so keyboard and pointer stay synchronized
+        if state == "menu":
+            for i, (_, btn) in enumerate(menu_buttons):
+                if btn.clicked(mouse_pos):
+                    menu_sel = i
+                    break
+        elif state == "mode":
+            for i, (_, btn) in enumerate(mode_buttons):
+                if btn.clicked(mouse_pos):
+                    mode_sel = i
+                    break
+        elif state == "gamemode":
+            for i, (_, btn) in enumerate(gamemode_buttons):
+                if btn.clicked(mouse_pos):
+                    gamemode_sel = i
+                    break
+            if back_btn.clicked(mouse_pos):
+                gamemode_sel = len(gamemode_buttons)
+        elif state == "mp_menu":
+            if host_btn.clicked(mouse_pos):
+                mp_sel = 0
+            elif join_btn.clicked(mouse_pos):
+                mp_sel = 1
+            elif back_btn.clicked(mouse_pos):
+                mp_sel = 2
 
         action = None   # the player's bash this frame, if any
         for event in pygame.event.get():
@@ -597,6 +642,70 @@ def main():
                         action = "right"
                     elif event.key == keybinds["ram"]:
                         action = "ram"
+                elif state == "menu":
+                    if event.key in (pygame.K_DOWN, pygame.K_s):
+                        menu_sel = (menu_sel + 1) % len(menu_buttons)
+                    elif event.key in (pygame.K_UP, pygame.K_w):
+                        menu_sel = (menu_sel - 1) % len(menu_buttons)
+                    elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
+                        name = menu_buttons[menu_sel][0]
+                        if name == "resume":
+                            state = "playing"
+                        elif name == "play":
+                            mode_sel = 0
+                            state = "mode"
+                        elif name == "settings":
+                            state = "settings"
+                        elif name == "quit":
+                            running = False
+                    elif event.key == pygame.K_ESCAPE and player is not None:
+                        state = "playing"
+                elif state == "mode":
+                    if event.key in (pygame.K_DOWN, pygame.K_s):
+                        mode_sel = (mode_sel + 1) % len(mode_buttons)
+                    elif event.key in (pygame.K_UP, pygame.K_w):
+                        mode_sel = (mode_sel - 1) % len(mode_buttons)
+                    elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
+                        nm = mode_buttons[mode_sel][0]
+                        if nm == "single":
+                            gamemode_sel = 0
+                            state = "gamemode"
+                        elif nm == "multi":
+                            mp_sel = 0
+                            state = "mp_menu"
+                        elif nm == "back":
+                            state = "menu"
+                    elif event.key == pygame.K_ESCAPE:
+                        state = "menu"
+                elif state == "gamemode":
+                    total_opts = len(gamemode_buttons) + 1
+                    if event.key in (pygame.K_DOWN, pygame.K_s):
+                        gamemode_sel = (gamemode_sel + 1) % total_opts
+                    elif event.key in (pygame.K_UP, pygame.K_w):
+                        gamemode_sel = (gamemode_sel - 1) % total_opts
+                    elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
+                        if gamemode_sel < len(gamemode_buttons):
+                            mk = gamemode_buttons[gamemode_sel][0]
+                            game_mode, name_next, state = mk, "single", "name_entry"
+                        else:
+                            state = "mode"
+                    elif event.key == pygame.K_ESCAPE:
+                        state = "mode"
+                elif state == "mp_menu":
+                    if event.key in (pygame.K_DOWN, pygame.K_s):
+                        mp_sel = (mp_sel + 1) % 3
+                    elif event.key in (pygame.K_UP, pygame.K_w):
+                        mp_sel = (mp_sel - 1) % 3
+                    elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
+                        if mp_sel == 0:
+                            state = "host_setup"
+                        elif mp_sel == 1:
+                            join_code, net_msg = "", ""
+                            state = "join_entry"
+                        elif mp_sel == 2:
+                            state = "mode"
+                    elif event.key == pygame.K_ESCAPE:
+                        state = "mode"
                 elif state == "name_entry":
                     if event.key == pygame.K_RETURN:
                         confirm_name()
@@ -623,15 +732,8 @@ def main():
                     if state == "results":
                         player = None
                     state = "menu"
-                elif event.key == pygame.K_ESCAPE and state in ("mode", "mp_menu", "host_setup", "gamemode"):
-                    if state == "mode":
-                        state = "menu"
-                    elif state == "host_setup":
-                        state = "mp_menu"
-                    elif state == "gamemode":
-                        state = "mode"
-                    else:
-                        state = "mode"
+                elif event.key == pygame.K_ESCAPE and state in ("host_setup",):
+                    state = "mp_menu"
                 elif event.key == pygame.K_ESCAPE and state == "lobby":
                     net_disconnect()
                     state = "mp_menu"
@@ -1020,7 +1122,7 @@ def main():
                     fr = flag.get_rect(center=(sim.W / 2, 218))
                     screen.blit(flag, fr)
                     pygame.draw.rect(screen, (230, 230, 230), fr, 1)
-                ctext = font_small.render(code.upper(), True, (255, 235, 120))
+                ctext = font_small.render(code.upper(), True, UI_HIGHLIGHT)
                 screen.blit(ctext, ctext.get_rect(center=(sim.W / 2, 242)))
             flag_prev.draw(screen, font, flag_prev.clicked(mouse_pos))
             flag_next.draw(screen, font, flag_next.clicked(mouse_pos))
@@ -1040,7 +1142,7 @@ def main():
             screen.blit(font_small.render("Volume", True, (220, 230, 210)), (sim.W / 2 - 170, 88))
             pygame.draw.rect(screen, (40, 55, 40), vol_track, border_radius=4)
             fillw = int(vol_track.w * sim.MASTER_VOLUME)
-            pygame.draw.rect(screen, (255, 200, 60), (vol_track.x, vol_track.y, fillw, vol_track.h),
+            pygame.draw.rect(screen, UI_HIGHLIGHT, (vol_track.x, vol_track.y, fillw, vol_track.h),
                              border_radius=4)
             pygame.draw.circle(screen, (255, 255, 255), (vol_track.x + fillw, vol_track.centery), 7)
             # lap count
@@ -1053,7 +1155,7 @@ def main():
             for i, (ak, albl) in enumerate(KEY_ACTIONS):
                 y = 186 + i * 20
                 binding = "press a key..." if awaiting_key == ak else pygame.key.name(keybinds[ak])
-                col = (255, 235, 120) if awaiting_key == ak else (230, 230, 230)
+                col = UI_HIGHLIGHT if awaiting_key == ak else (230, 230, 230)
                 screen.blit(font_small.render(albl, True, (210, 220, 210)), (sim.W / 2 - 170, y))
                 b = font_small.render(binding, True, col)
                 screen.blit(b, b.get_rect(midright=(sim.W / 2 + 170, y + 10)))
@@ -1064,14 +1166,14 @@ def main():
             title = font_big.render(end_title, True, (255, 255, 255))
             screen.blit(title, title.get_rect(center=(sim.W / 2, 36)))
             if team_result:
-                tr = font_small.render(team_result, True, (255, 235, 120))
+                tr = font_small.render(team_result, True, UI_HIGHLIGHT)
                 screen.blit(tr, tr.get_rect(center=(sim.W / 2, 66)))
             hdr = font_small.render("best lap", True, (170, 185, 165))
             screen.blit(hdr, hdr.get_rect(midright=(sim.W / 2 + 170, 78)))
             for i, c in enumerate(final_order):
                 me = c is player
                 tag = f"{i + 1}.  {c.name}" + ("  (you)" if me else "") + ("  OUT" if c.dead else "")
-                color = (255, 235, 120) if me else (235, 235, 235)
+                color = UI_HIGHLIGHT if me else (235, 235, 235)
                 y = 90 + i * 18
                 row = font_small.render(tag, True, color)
                 screen.blit(row, row.get_rect(midleft=(sim.W / 2 - 170, y)))
@@ -1082,24 +1184,24 @@ def main():
         elif state == "mode":
             draw_bg()
             draw_logo()
-            for _, btn in mode_buttons:
-                btn.draw(screen, font, btn.clicked(mouse_pos))
+            for i, (_, btn) in enumerate(mode_buttons):
+                btn.draw(screen, font, i == mode_sel)
 
         elif state == "gamemode":
             draw_bg()
             title = font.render("CHOOSE MODE", True, (255, 255, 255))
             screen.blit(title, title.get_rect(center=(sim.W / 2, 56)))
-            for mk, btn in gamemode_buttons:
-                btn.draw(screen, font_small, btn.clicked(mouse_pos))
-            back_btn.draw(screen, font, back_btn.clicked(mouse_pos))
+            for i, (mk, btn) in enumerate(gamemode_buttons):
+                btn.draw(screen, font_small, i == gamemode_sel)
+            back_btn.draw(screen, font, gamemode_sel == len(gamemode_buttons))
 
         elif state == "mp_menu":
             draw_bg()
             title = font_big.render("MULTIPLAYER", True, (255, 255, 255))
             screen.blit(title, title.get_rect(center=(sim.W / 2, 60)))
-            host_btn.draw(screen, font, host_btn.clicked(mouse_pos))
-            join_btn.draw(screen, font, join_btn.clicked(mouse_pos))
-            back_btn.draw(screen, font, back_btn.clicked(mouse_pos))
+            host_btn.draw(screen, font, mp_sel == 0)
+            join_btn.draw(screen, font, mp_sel == 1)
+            back_btn.draw(screen, font, mp_sel == 2)
             if net_msg:
                 msg = font_small.render(net_msg, True, (240, 180, 120))
                 screen.blit(msg, msg.get_rect(center=(sim.W / 2, 262)))
@@ -1112,7 +1214,7 @@ def main():
             screen.blit(lbl, lbl.get_rect(center=(sim.W / 2, 130)))
             cap = font_small.render("Max players:", True, (220, 230, 210))
             screen.blit(cap, cap.get_rect(center=(sim.W / 2, 176)))
-            num = font.render(str(mp_max), True, (255, 235, 120))
+            num = font.render(str(mp_max), True, UI_HIGHLIGHT)
             screen.blit(num, num.get_rect(center=(sim.W / 2, 216)))
             minus_btn.draw(screen, font, minus_btn.clicked(mouse_pos))
             plus_btn.draw(screen, font, plus_btn.clicked(mouse_pos))
@@ -1149,7 +1251,7 @@ def main():
                 head = font_small.render(
                     f"{lobby.get('name','')}'s lobby    CODE: {lobby.get('code','')}"
                     f"    ({len(lobby.get('players', []))}/{lobby.get('max','?')})",
-                    True, (255, 235, 120))
+                    True, UI_HIGHLIGHT)
                 screen.blit(head, head.get_rect(center=(sim.W / 2, 70)))
                 for i, p in enumerate(lobby.get("players", [])):
                     y = 110 + i * 30
@@ -1159,7 +1261,7 @@ def main():
                     if fl:
                         screen.blit(fl, (x, y + 2))
                     nm = p["name"] + ("  (you)" if is_me else "") + ("  [host]" if p["id"] == lobby.get("host") else "")
-                    nmcol = (255, 235, 120) if is_me else (235, 235, 235)
+                    nmcol = UI_HIGHLIGHT if is_me else (235, 235, 235)
                     screen.blit(font_small.render(nm, True, nmcol), (x + 26, y))
                     rtxt = "READY" if p["ready"] else "not ready"
                     rcol = (120, 230, 120) if p["ready"] else (200, 120, 120)
