@@ -1865,7 +1865,7 @@ def apply_net_state(car, d, t=1.0):
 # =================================================================================================
 # drawing
 # =================================================================================================
-ZOOM = 1.45         # camera zoom; >1 shows less of the world, bigger karts
+ZOOM = 1.68         # camera zoom; >1 shows less of the world, bigger karts
 # chunk is in *zoomed-ground* pixels and sized to still cover the screen once rotated. Using a
 # ground that's pre-scaled by ZOOM lets us rotate() each frame (fast) instead of rotozoom() (slow).
 _CHUNK = int(math.hypot(W, H)) + 6 * TILE
@@ -1893,7 +1893,6 @@ def draw_ground(screen, cam):
     wcy = (top + _CHUNK / 2) / ZOOM + oy
     sx, sy = cam.to_screen(wcx, wcy)
     screen.blit(rot, rot.get_rect(center=(round(sx), round(sy))))
-    screen.fill((0, 0, 0, 255), special_flags=pygame.BLEND_RGBA_MAX)
 
 def _get_overlay():
     global _overlay
