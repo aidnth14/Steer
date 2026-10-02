@@ -68,13 +68,13 @@ class TestGameLoop(unittest.TestCase):
 
     def test_play_a_race(self):
         script = Script()
-        # menu: Play (first menu button, y=100 h=46)
-        script.click(5, (W2, 123))
-        # mode: Singleplayer (sp_btn at y=120 h=48)
-        script.click(12, (W2, 144))
-        # gamemode: Race (first mode button at y=90 h=36)
+        # menu: Play — bottom-left stack, 3 items (play/settings/quit), first row centre
+        script.click(5, (136, 281))
+        # mode: Singleplayer — bottom-left stack, first row
+        script.click(12, (146, 281))
+        # gamemode: Race (first mode button at y=90 h=36, centred)
         script.click(19, (W2, 108))
-        # name_entry: Start Race (start_btn at y=256 h=42)
+        # name_entry: Start Race (start_btn at y=256 h=42, centred)
         script.click(26, (W2, 277))
         # countdown is 3 s (~180 frames); hold steer through the race
         script.hold(30, 400, {pygame.K_a})
@@ -83,9 +83,9 @@ class TestGameLoop(unittest.TestCase):
             script.key(f, pygame.K_q)
             script.key(f + 5, pygame.K_e)
             script.key(f + 10, pygame.K_SPACE)
-        # Esc -> pause menu, then Resume (first menu button), then let END post QUIT
+        # Esc -> pause menu, then Resume (bottom-left; 4 items now, first row), then END = QUIT
         script.key(330, pygame.K_ESCAPE)
-        script.click(345, (W2, 123))
+        script.click(345, (136, 239))
 
         # count sim.step calls to prove we reached the race
         calls = {"n": 0}

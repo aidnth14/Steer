@@ -121,16 +121,23 @@ def migrate_cam(old, car):
     return migrate(old, sim.Camera(car))
 
 class Button:
-    def __init__(self, rect, label):
+    def __init__(self, rect, label, align="center"):
         self.rect = pygame.Rect(rect)
         self.label = label
+        self.align = align
 
     def draw(self, screen, font, hover):
-        bg = (90, 90, 95) if hover else (60, 60, 65)
-        pygame.draw.rect(screen, bg, self.rect, border_radius=8)
-        pygame.draw.rect(screen, (230, 230, 230), self.rect, 2, border_radius=8)
-        text = font.render(self.label, True, (255, 255, 255))
-        screen.blit(text, text.get_rect(center=self.rect.center))
+        # no background: just the label with a dark outline so it reads over anything
+        col = (255, 235, 120) if hover else (255, 255, 255)
+        base = font.render(self.label, True, col)
+        edge = font.render(self.label, True, (20, 20, 25))
+        if self.align == "left":
+            r = base.get_rect(midleft=(self.rect.x + 2, self.rect.centery))
+        else:
+            r = base.get_rect(center=self.rect.center)
+        for dx, dy in ((-2, 0), (2, 0), (0, -2), (0, 2), (-2, -2), (2, -2), (-2, 2), (2, 2)):
+            screen.blit(edge, (r.x + dx, r.y + dy))
+        screen.blit(base, r)
 
     def clicked(self, pos):
         return self.rect.collidepoint(pos)
@@ -198,6 +205,20 @@ def main():
             screen.blit(menu_bg, (0, 0))
         else:
             screen.fill((30, 60, 30))
+
+    # STEER logo for the top-left of the menu / mode screens
+    try:
+        _logo = pygame.image.load(os.path.join(sim.UI_DIR, "logo.png")).convert_alpha()
+        lh = 68
+        logo = pygame.transform.scale(_logo, (round(_logo.get_width() * lh / _logo.get_height()), lh))
+    except (pygame.error, FileNotFoundError):
+        logo = None
+
+    def draw_logo():
+        if logo is not None:
+            screen.blit(logo, (16, 12))
+        else:
+            screen.blit(font_big.render("STEER", True, (255, 255, 255)), (16, 12))
 
     profile = load_profile()
     keybinds = dict(DEFAULT_KEYS)
@@ -466,21 +487,24 @@ def main():
                     if slot is not None:
                         snap_by_slot[slot] = m.get("car")
 
-        # menu layout depends on whether a paused race exists (Resume/New Race vs just Play);
-        # build it once per frame so clicks and drawing always agree
-        menu_buttons = []
-        y = 100
+        # menu layout: buttons stacked in the bottom-left corner, left-aligned, no background
+        items = []
         if player is not None:
-            menu_buttons.append(("resume", Button((sim.W / 2 - 100, y, 200, 46), "Resume")))
-            y += 56
-            menu_buttons.append(("play", Button((sim.W / 2 - 100, y, 200, 46), "New Race")))
+            items += [("resume", "Resume"), ("play", "New Race")]
         else:
-            menu_buttons.append(("play", Button((sim.W / 2 - 100, y, 200, 46), "Play")))
-        y += 56
-        menu_buttons.append(("settings", Button((sim.W / 2 - 100, y, 200, 46), "Settings")))
-        y += 56
-        menu_buttons.append(("quit", Button((sim.W / 2 - 100, y, 200, 46), "Quit")))
+            items.append(("play", "Play"))
+        items += [("settings", "Settings"), ("quit", "Quit")]
+        bh = 42
+        y0 = sim.H - 14 - bh * len(items)
+        menu_buttons = [(nm, Button((16, y0 + i * bh, 240, bh), lbl, align="left"))
+                        for i, (nm, lbl) in enumerate(items)]
         menu_sel = max(0, min(menu_sel, len(menu_buttons) - 1))
+
+        # mode screen (Singleplayer / Multiplayer / Back), same bottom-left stack
+        mode_items = [("single", "Singleplayer"), ("multi", "Multiplayer"), ("back", "Back")]
+        mode_y0 = sim.H - 14 - bh * len(mode_items)
+        mode_buttons = [(nm, Button((16, mode_y0 + i * bh, 260, bh), lbl, align="left"))
+                        for i, (nm, lbl) in enumerate(mode_items)]
 
         gamemode_buttons = []
         gy = 90
@@ -573,13 +597,17 @@ def main():
                     elif flag_next.clicked(mouse_pos) and sim.FLAG_CODES:
                         flag_idx = (flag_idx + 1) % len(sim.FLAG_CODES)
                 elif state == "mode":
-                    if sp_btn.clicked(mouse_pos):
-                        state = "gamemode"
-                    elif mp_btn.clicked(mouse_pos):
-                        name_next = "mp"
-                        state = "name_entry"
-                    elif back_btn.clicked(mouse_pos):
-                        state = "menu"
+                    for nm, btn in mode_buttons:
+                        if not btn.clicked(mouse_pos):
+                            continue
+                        if nm == "single":
+                            state = "gamemode"
+                        elif nm == "multi":
+                            name_next = "mp"
+                            state = "name_entry"
+                        elif nm == "back":
+                            state = "menu"
+                        break
                 elif state == "gamemode":
                     hit_mode = False
                     for mk, btn in gamemode_buttons:
@@ -903,8 +931,7 @@ def main():
 
         elif state == "menu":
             draw_bg()
-            title = font_big.render("STEER", True, (255, 255, 255))
-            screen.blit(title, title.get_rect(center=(sim.W / 2, 55)))
+            draw_logo()
             for i, (_, btn) in enumerate(menu_buttons):
                 btn.draw(screen, font, btn.clicked(mouse_pos) or i == menu_sel)
 
@@ -992,11 +1019,9 @@ def main():
 
         elif state == "mode":
             draw_bg()
-            title = font_big.render("PLAY", True, (255, 255, 255))
-            screen.blit(title, title.get_rect(center=(sim.W / 2, 60)))
-            sp_btn.draw(screen, font, sp_btn.clicked(mouse_pos))
-            mp_btn.draw(screen, font, mp_btn.clicked(mouse_pos))
-            back_btn.draw(screen, font, back_btn.clicked(mouse_pos))
+            draw_logo()
+            for _, btn in mode_buttons:
+                btn.draw(screen, font, btn.clicked(mouse_pos))
 
         elif state == "gamemode":
             draw_bg()
