@@ -17,8 +17,11 @@ python3 main.py
 | `A` / `D` or `←` / `→` | steer |
 | `Q` / `E` | side-bash left / right (a sideways lunge that shoves whoever you hit) |
 | `Space` | ram (a forward lunge, for hitting someone from behind) |
+| `Shift` (hold) | drift — looser rear end; hold through a corner to charge a **mini-boost**, released automatically when you let go |
 | `Esc` | pause menu (Resume / New Race / Settings / Quit) |
-| `R` | force a hot reload of `sim.py` |
+| `R` | force a hot reload of `sim.py` (single-player only) |
+
+All keyboard actions are **rebindable** in Settings.
 
 Bashes share one cooldown (1.5 s); the bar under your hearts shows when it's ready.
 
@@ -33,8 +36,23 @@ ready. Hot-plug supported.
 type your name, then pick a flag (`<` / `>` buttons or the arrow keys cycle through 255
 country flags).
 
-- **Singleplayer** — 5–7 bots (random names + flags) on a fresh random track.
+- **Singleplayer** — then pick a **game mode** (below) and race 5–7 bots on a fresh track.
 - **Multiplayer** — see below.
+
+### Game modes (single-player)
+
+- **Race** — standard laps against bots.
+- **Time Trial** — solo against a **ghost** of your best lap (replayed as a faint outline).
+- **Elimination** — every 8 s the last-place kart is knocked out; last one standing wins.
+- **Battle** — survival: no laps, last kart with hearts left wins.
+- **Team Race** — karts split into red/blue teams.
+
+### Settings & profile
+
+Settings has a **master volume** slider, a **lap count** toggle (3 / 5 / 7), and **key
+rebinding** (click an action, press a key). Your name, flag, volume, lap count, keybinds,
+and stats (races, wins, best lap) are saved to `~/.steer_profile.json` and reloaded next
+launch.
 
 ## Multiplayer (online co-op)
 
@@ -139,13 +157,20 @@ Lobby, ready-up, kick, auto-start, and host migration are all handled server-sid
   multiplayer drops you to a spectator view of the leader until the race finishes).
 - **Recovery**: a kart stuck against bushes backs up on its own; if it's still wedged
   after 3 s it's put back on the road.
-- **Effects**: skid marks from real tyre slip, grass/dirt dust, impact sparks, screen shake.
+- **Drifting**: hold drift through a corner to slide the rear and charge a mini-boost that
+  fires on release (coloured drift smoke shows the charge building).
+- **Effects**: skid marks from real tyre slip, surface dust off-road, drift smoke, boost
+  flames, collision sparks, screen shake.
+- **Position popups**: your place in the running order flashes up when it changes.
 
 ## Not built yet
 
-- No game-over state when hearts hit 0 (a `death` sound plays, but the car keeps going).
-- Multiplayer has no player-vs-player physics authority — remote cars are interpolated
-  from their own snapshots, so collisions between players are approximate.
+- Multiplayer still uses the per-client relay model (each client sims its own car), so
+  player-vs-player collisions are approximate. A **host-authoritative physics** rewrite and
+  **reconnect-to-same-slot** are the next planned step.
+- Game modes (Time Trial / Elimination / Battle / Team) are single-player only so far;
+  multiplayer is plain Race.
+- Team Race assigns red/blue teams and colours but doesn't yet tally a shared team score.
 
 ## Tuning (all constants at the top of `sim.py`)
 

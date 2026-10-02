@@ -25,6 +25,39 @@ PAD_LEFT = pygame.CONTROLLER_BUTTON_DPAD_LEFT
 PAD_RIGHT = pygame.CONTROLLER_BUTTON_DPAD_RIGHT
 
 SIM_PATH = os.path.join(os.path.dirname(__file__), "sim.py")
+PROFILE_PATH = os.path.join(os.path.expanduser("~"), ".steer_profile.json")
+
+# rebindable keyboard actions (defaults); stored per-user in the profile
+DEFAULT_KEYS = {
+    "left": pygame.K_a, "right": pygame.K_d, "bashL": pygame.K_q,
+    "bashR": pygame.K_e, "ram": pygame.K_SPACE, "drift": pygame.K_LSHIFT,
+}
+KEY_ACTIONS = [("left", "Steer left"), ("right", "Steer right"), ("bashL", "Bash left"),
+               ("bashR", "Bash right"), ("ram", "Ram"), ("drift", "Drift")]
+
+GAME_MODES = [("race", "Race"), ("trial", "Time Trial"), ("elim", "Elimination"),
+              ("battle", "Battle"), ("team", "Team Race")]
+ELIM_INTERVAL = 8.0     # seconds between eliminations in Elimination mode
+TEAM_COLORS = [(230, 70, 70), (70, 120, 235)]   # red / blue teams
+
+def load_profile():
+    import json
+    d = {"name": "Player", "flag": "us", "races": 0, "wins": 0,
+         "best_lap": 0.0, "volume": 0.8, "laps": 3, "keys": {}}
+    try:
+        with open(PROFILE_PATH) as f:
+            d.update(json.load(f))
+    except (OSError, ValueError):
+        pass
+    return d
+
+def save_profile(d):
+    import json
+    try:
+        with open(PROFILE_PATH, "w") as f:
+            json.dump(d, f, indent=2)
+    except OSError as e:
+        print("profile save failed:", e)
 
 PLAYER_COLOR = (230, 60, 60)
 BOT_COLORS = [(60, 140, 230), (230, 200, 60), (160, 80, 220), (240, 140, 40), (90, 220, 190)]
@@ -133,16 +166,45 @@ def main():
             return 0.0
         return max(-1.0, min(1.0, s))
 
+    def pad_drift():
+        for pad in pads.values():
+            try:
+                if pad.get_button(PAD_BACK):    # B / Circle held = drift
+                    return True
+            except pygame.error:
+                pass
+        return False
+
     font_big = sim.get_font(64)
     font = sim.get_font(40)
     font_small = sim.get_font(26)
 
+    profile = load_profile()
+    keybinds = dict(DEFAULT_KEYS)
+    keybinds.update({k: int(v) for k, v in profile.get("keys", {}).items() if k in DEFAULT_KEYS})
+    sim.set_master_volume(profile.get("volume", 0.8))
+    sim.TOTAL_LAPS = int(profile.get("laps", 3))
+
     state = "menu"
     menu_sel = 0                # highlighted menu row for controller / keyboard nav
     current_seed = sim.ROAD_SEED
-    player_name = "Player"      # last name typed; prefilled on the name screen
-    flag_idx = sim.FLAG_CODES.index("us") if "us" in sim.FLAG_CODES else 0
+    player_name = profile.get("name", "Player")
+    _pf = profile.get("flag", "us")
+    flag_idx = sim.FLAG_CODES.index(_pf) if _pf in sim.FLAG_CODES else (
+        sim.FLAG_CODES.index("us") if "us" in sim.FLAG_CODES else 0)
     name_next = "single"        # where the name screen goes on confirm: "single" or "mp"
+    game_mode = "race"          # race | trial | elim | battle | team
+
+    # per-race mode runtime
+    elim_timer = 0.0
+    ghost_best = None           # [(x, y, angle), ...] sampled from your best lap (Time Trial)
+    ghost_rec = []              # samples for the lap in progress
+    ghost_time = 0.0            # lap time of the stored ghost
+    trial_lap = 0               # last lap index seen (to detect a new lap in Time Trial)
+    last_ranks = {}             # car -> last leaderboard rank, for position popups
+    popup = None                # (text, color, seconds-left)
+    awaiting_key = None         # action name being rebound in Settings
+    vol_dragging = False
 
     # multiplayer state
     online = False              # True once a networked race is running
@@ -176,6 +238,8 @@ def main():
     confirm_join_btn = Button((sim.W / 2 - 100, 256, 200, 42), "Join")
     ready_btn = Button((sim.W / 2 - 170, 330, 150, 40), "Ready")
     leave_btn = Button((sim.W / 2 + 20, 330, 150, 40), "Leave")
+    laps_btn = Button((sim.W / 2 + 10, 132, 150, 34), "Laps: 3")
+    vol_track = pygame.Rect(sim.W / 2 + 10, 92, 150, 10)
 
     cars, player, cam = [], None, None
     final_order = []        # frozen leaderboard shown on the results screen
@@ -183,11 +247,12 @@ def main():
 
     def start_game():
         nonlocal cars, player, cam, current_seed, state, countdown, go_timer, online
+        nonlocal elim_timer, ghost_rec, last_ranks, trial_lap, ghost_best, ghost_time, popup
         sim.NET_ROLE = "off"
         online = False
-        bot_count = random.randint(5, 7)        # 5-7 bots per race
+        bot_count = 0 if game_mode == "trial" else random.randint(5, 7)
         current_seed = random.randint(0, 1_000_000)
-        print(f"track seed: {current_seed}  bots: {bot_count}")
+        print(f"track seed: {current_seed}  mode: {game_mode}  bots: {bot_count}")
         sim.new_map(current_seed)   # whole track + scenery built right now, not as-you-drive
         cars = sim.spawn_grid(1 + bot_count)
         player = cars[min(PLAYER_SLOT, len(cars) - 1)]
@@ -196,8 +261,14 @@ def main():
         player.flag = sim.FLAG_CODES[flag_idx] if sim.FLAG_CODES else None
         for i, bot in enumerate(c for c in cars if c is not player):
             sim.make_bot(bot, i, BOT_COLORS[i % len(BOT_COLORS)])
+        if game_mode == "team":     # alternate cars into two teams, colour by team
+            for i, c in enumerate(cars):
+                c.team = i % 2
+                c.color = TEAM_COLORS[c.team]
         cam = sim.Camera(player)
         countdown, go_timer = 3.0, 0.0
+        elim_timer, ghost_rec, last_ranks, trial_lap, popup = 0.0, [], {}, 0, None
+        ghost_best, ghost_time = None, 0.0
         state = "playing"
 
     def reload_and_migrate():
@@ -388,21 +459,34 @@ def main():
         menu_buttons.append(("quit", Button((sim.W / 2 - 100, y, 200, 46), "Quit")))
         menu_sel = max(0, min(menu_sel, len(menu_buttons) - 1))
 
+        gamemode_buttons = []
+        gy = 90
+        for mk, mlabel in GAME_MODES:
+            gamemode_buttons.append((mk, Button((sim.W / 2 - 110, gy, 220, 36), mlabel)))
+            gy += 42
+
         action = None   # the player's bash this frame, if any
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 running = False
             elif event.type == pygame.KEYDOWN:
+                if state == "settings" and awaiting_key is not None:
+                    if event.key != pygame.K_ESCAPE:    # Esc cancels the rebind
+                        keybinds[awaiting_key] = event.key
+                        profile.setdefault("keys", {})[awaiting_key] = event.key
+                        save_profile(profile)
+                    awaiting_key = None
+                    continue
                 if state == "playing":
-                    if event.key == pygame.K_r:
+                    if event.key == pygame.K_r and not online:
                         reload_and_migrate()
                     elif event.key == pygame.K_ESCAPE:
                         state = "menu"          # pauses; the race stays alive for Resume
-                    elif event.key == pygame.K_q:
+                    elif event.key == keybinds["bashL"]:
                         action = "left"
-                    elif event.key == pygame.K_e:
+                    elif event.key == keybinds["bashR"]:
                         action = "right"
-                    elif event.key == pygame.K_SPACE:
+                    elif event.key == keybinds["ram"]:
                         action = "ram"
                 elif state == "name_entry":
                     if event.key == pygame.K_RETURN:
@@ -430,11 +514,13 @@ def main():
                     if state == "results":
                         player = None
                     state = "menu"
-                elif event.key == pygame.K_ESCAPE and state in ("mode", "mp_menu", "host_setup"):
+                elif event.key == pygame.K_ESCAPE and state in ("mode", "mp_menu", "host_setup", "gamemode"):
                     if state == "mode":
                         state = "menu"
                     elif state == "host_setup":
                         state = "mp_menu"
+                    elif state == "gamemode":
+                        state = "mode"
                     else:
                         state = "mode"
                 elif event.key == pygame.K_ESCAPE and state == "lobby":
@@ -465,13 +551,21 @@ def main():
                         flag_idx = (flag_idx + 1) % len(sim.FLAG_CODES)
                 elif state == "mode":
                     if sp_btn.clicked(mouse_pos):
-                        name_next = "single"
-                        state = "name_entry"
+                        state = "gamemode"
                     elif mp_btn.clicked(mouse_pos):
                         name_next = "mp"
                         state = "name_entry"
                     elif back_btn.clicked(mouse_pos):
                         state = "menu"
+                elif state == "gamemode":
+                    hit_mode = False
+                    for mk, btn in gamemode_buttons:
+                        if btn.clicked(mouse_pos):
+                            game_mode, name_next, state = mk, "single", "name_entry"
+                            hit_mode = True
+                            break
+                    if not hit_mode and back_btn.clicked(mouse_pos):
+                        state = "mode"
                 elif state == "mp_menu":
                     if host_btn.clicked(mouse_pos):
                         state = "host_setup"
@@ -511,11 +605,29 @@ def main():
                                 break
                 elif state == "settings":
                     if back_btn.clicked(mouse_pos):
+                        save_profile(profile)
                         state = "menu"
+                    elif laps_btn.clicked(mouse_pos):
+                        nxt = {3: 5, 5: 7, 7: 3}
+                        sim.TOTAL_LAPS = nxt.get(sim.TOTAL_LAPS, 3)
+                        profile["laps"] = sim.TOTAL_LAPS
+                    elif vol_track.collidepoint(mouse_pos):
+                        vol_dragging = True
+                    else:
+                        for i, (ak, _) in enumerate(KEY_ACTIONS):
+                            rr = pygame.Rect(sim.W / 2 - 170, 186 + i * 20, 340, 20)
+                            if rr.collidepoint(mouse_pos):
+                                awaiting_key = ak
+                                break
                 elif state == "results":
                     if back_btn.clicked(mouse_pos):
                         player = None
                         state = "menu"
+            elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
+                if vol_dragging:
+                    vol_dragging = False
+                    profile["volume"] = sim.MASTER_VOLUME
+                    save_profile(profile)
             elif event.type == pygame.CONTROLLERDEVICEADDED:
                 open_pad(event.device_index)
             elif event.type == pygame.CONTROLLERDEVICEREMOVED:
@@ -559,10 +671,14 @@ def main():
                         flag_idx = (flag_idx + 1) % len(sim.FLAG_CODES)
                 elif state == "mode":
                     if b == PAD_CONFIRM:
-                        name_next = "single"
-                        state = "name_entry"
+                        state = "gamemode"
                     elif b == PAD_BACK:
                         state = "menu"
+                elif state == "gamemode":
+                    if b == PAD_CONFIRM:        # A starts a plain Race; use mouse for other modes
+                        game_mode, name_next, state = "race", "single", "name_entry"
+                    elif b == PAD_BACK:
+                        state = "mode"
                 elif state == "mp_menu":
                     if b == PAD_CONFIRM:
                         state = "host_setup"
@@ -615,15 +731,16 @@ def main():
 
                 keys = pygame.key.get_pressed()
                 steer = 0.0
-                if keys[pygame.K_LEFT] or keys[pygame.K_a]:
+                if keys[pygame.K_LEFT] or keys[keybinds["left"]]:
                     steer -= 1
-                if keys[pygame.K_RIGHT] or keys[pygame.K_d]:
+                if keys[pygame.K_RIGHT] or keys[keybinds["right"]]:
                     steer += 1
                 steer = max(-1.0, min(1.0, steer + pad_steer()))
+                drift = keys[keybinds["drift"]] or pad_drift()
 
                 spectating = online and player.dead
                 if spectating:
-                    steer, action = 0.0, None
+                    steer, action, drift = 0.0, None, False
 
                 if online:
                     # I drive my car; bots are mine too if I'm host; every other car is a
@@ -631,7 +748,7 @@ def main():
                     controls = []
                     for c in cars:
                         if c is player:
-                            controls.append((steer, action))
+                            controls.append((steer, action, drift))
                         elif not c.is_remote:           # host-owned bot
                             controls.append(sim.bot_control(c, cars, dt))
                         else:
@@ -663,9 +780,27 @@ def main():
                             netc.send({"t": "finished", "order": order})
                             apply_finished(order)
                 else:
-                    controls = [(steer, action) if c is player else sim.bot_control(c, cars, dt)
-                                for c in cars]
+                    pc = (steer, action, drift)
+                    controls = [pc if c is player else sim.bot_control(c, cars, dt) for c in cars]
                     sim.step(dt, cars, controls)
+
+                    # ---- single-player game-mode logic --------------------------------
+                    if game_mode == "elim":         # cull the last-place living kart periodically
+                        elim_timer += dt
+                        living = [c for c in cars if not c.dead]
+                        if elim_timer >= ELIM_INTERVAL and len(living) > 1:
+                            elim_timer = 0.0
+                            loser = min(living, key=lambda c: c.progress)
+                            loser.dead = True
+                            if loser is not player:
+                                popup = (f"{loser.name} eliminated!", (255, 150, 120), 2.0)
+                    if game_mode == "trial":        # record the ghost path; bank it on a new best lap
+                        ghost_rec.append((player.x, player.y, player.angle))
+                        if player.cur_lap > trial_lap:
+                            if player.last_lap > 0 and (ghost_time <= 0 or player.last_lap <= ghost_time):
+                                ghost_best, ghost_time = list(ghost_rec), player.last_lap
+                            ghost_rec = []
+                            trial_lap = player.cur_lap
 
                 # camera follows the leader while spectating, else your own car
                 cam_target = player
@@ -675,6 +810,11 @@ def main():
                 cam.update(dt, cam_target)
 
                 sim.draw_world(screen, cam, cars)
+                # Time Trial ghost: replay your best lap by time index
+                if game_mode == "trial" and ghost_best:
+                    gi = min(len(ghost_best) - 1, len(ghost_rec))
+                    gx, gy, ga = ghost_best[gi]
+                    sim.draw_ghost(screen, cam, gx, gy, ga)
                 sim.draw_hud(screen, player, font_small, cars)
                 go_timer = max(0.0, go_timer - dt)
                 if go_timer > 0:
@@ -684,14 +824,50 @@ def main():
                     ov = font.render("YOU'RE OUT - spectating", True, (255, 120, 120))
                     screen.blit(ov, ov.get_rect(center=(sim.W / 2, 40)))
 
-                if not online and sim.lap_of(player) >= sim.TOTAL_LAPS:
-                    final_order = sorted(cars, key=lambda c: (c.dead, -c.progress))
-                    end_title = "FINISH"
-                    state = "results"
-                elif not online and player.dead:
-                    final_order = sorted(cars, key=lambda c: (c.dead, -c.progress))
-                    end_title = "GAME OVER"
-                    state = "results"
+                # position-change popups (your rank in the live order)
+                if not spectating:
+                    order = sorted(cars, key=lambda c: (c.dead, -c.progress))
+                    rank = order.index(player) + 1
+                    prev = last_ranks.get("me", rank)
+                    if rank < prev:
+                        popup = (f"UP to P{rank}", (150, 255, 150), 1.5)
+                    elif rank > prev:
+                        popup = (f"down to P{rank}", (255, 180, 120), 1.5)
+                    last_ranks["me"] = rank
+                if popup:
+                    txt, col, tleft = popup
+                    tleft -= dt
+                    popup = (txt, col, tleft) if tleft > 0 else None
+                    if popup:
+                        ps = font.render(txt, True, col)
+                        screen.blit(ps, ps.get_rect(center=(sim.W / 2, 70)))
+
+                # ---- single-player end conditions ---------------------------------
+                if not online:
+                    end = False
+                    if game_mode == "trial":
+                        if sim.lap_of(player) >= sim.TOTAL_LAPS:
+                            end, end_title = True, "FINISH"
+                    elif game_mode in ("battle", "elim"):
+                        if len([c for c in cars if not c.dead]) <= 1:
+                            end, end_title = True, ("BATTLE OVER" if game_mode == "battle" else "FINISH")
+                    else:                       # race / team
+                        if any(sim.lap_of(c) >= sim.TOTAL_LAPS for c in cars):
+                            end, end_title = True, "FINISH"
+                    if not end and player.dead and game_mode not in ("battle", "elim"):
+                        end, end_title = True, "GAME OVER"
+                    if end:
+                        final_order = sorted(cars, key=lambda c: (c.dead, -c.progress))
+                        profile["races"] = profile.get("races", 0) + 1
+                        if final_order and final_order[0] is player:
+                            profile["wins"] = profile.get("wins", 0) + 1
+                        if player.best_lap > 0 and (profile["best_lap"] <= 0
+                                                    or player.best_lap < profile["best_lap"]):
+                            profile["best_lap"] = player.best_lap
+                        profile["name"], profile["flag"] = player_name, (
+                            sim.FLAG_CODES[flag_idx] if sim.FLAG_CODES else "us")
+                        save_profile(profile)
+                        state = "results"
 
         elif state == "menu":
             screen.fill((30, 60, 30))
@@ -738,9 +914,31 @@ def main():
         elif state == "settings":
             screen.fill((30, 60, 30))
             title = font_big.render("SETTINGS", True, (255, 255, 255))
-            screen.blit(title, title.get_rect(center=(sim.W / 2, 80)))
-            label = font.render("Bots per race: 5-7 (random)", True, (255, 255, 255))
-            screen.blit(label, label.get_rect(center=(sim.W / 2, 150)))
+            screen.blit(title, title.get_rect(center=(sim.W / 2, 40)))
+            # volume slider
+            if vol_dragging:
+                v = (mouse_pos[0] - vol_track.x) / vol_track.w
+                sim.set_master_volume(v)
+            screen.blit(font_small.render("Volume", True, (220, 230, 210)), (sim.W / 2 - 170, 88))
+            pygame.draw.rect(screen, (40, 55, 40), vol_track, border_radius=4)
+            fillw = int(vol_track.w * sim.MASTER_VOLUME)
+            pygame.draw.rect(screen, (255, 200, 60), (vol_track.x, vol_track.y, fillw, vol_track.h),
+                             border_radius=4)
+            pygame.draw.circle(screen, (255, 255, 255), (vol_track.x + fillw, vol_track.centery), 7)
+            # lap count
+            screen.blit(font_small.render("Laps", True, (220, 230, 210)), (sim.W / 2 - 170, 140))
+            laps_btn.label = f"Laps: {sim.TOTAL_LAPS}"
+            laps_btn.draw(screen, font_small, laps_btn.clicked(mouse_pos))
+            # controls (click a row, then press a key)
+            screen.blit(font_small.render("Controls (click, then press a key):", True,
+                                          (200, 220, 200)), (sim.W / 2 - 170, 168))
+            for i, (ak, albl) in enumerate(KEY_ACTIONS):
+                y = 186 + i * 20
+                binding = "press a key..." if awaiting_key == ak else pygame.key.name(keybinds[ak])
+                col = (255, 235, 120) if awaiting_key == ak else (230, 230, 230)
+                screen.blit(font_small.render(albl, True, (210, 220, 210)), (sim.W / 2 - 170, y))
+                b = font_small.render(binding, True, col)
+                screen.blit(b, b.get_rect(midright=(sim.W / 2 + 170, y + 10)))
             back_btn.draw(screen, font, back_btn.clicked(mouse_pos))
 
         elif state == "results":
@@ -766,6 +964,14 @@ def main():
             screen.blit(title, title.get_rect(center=(sim.W / 2, 60)))
             sp_btn.draw(screen, font, sp_btn.clicked(mouse_pos))
             mp_btn.draw(screen, font, mp_btn.clicked(mouse_pos))
+            back_btn.draw(screen, font, back_btn.clicked(mouse_pos))
+
+        elif state == "gamemode":
+            screen.fill((30, 60, 30))
+            title = font.render("CHOOSE MODE", True, (255, 255, 255))
+            screen.blit(title, title.get_rect(center=(sim.W / 2, 56)))
+            for mk, btn in gamemode_buttons:
+                btn.draw(screen, font_small, btn.clicked(mouse_pos))
             back_btn.draw(screen, font, back_btn.clicked(mouse_pos))
 
         elif state == "mp_menu":

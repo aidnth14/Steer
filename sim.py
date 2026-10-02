@@ -106,10 +106,18 @@ def load_sounds():
     for key, fn in SOUND_FILES.items():
         try:
             s = pygame.mixer.Sound(os.path.join(SOUND_DIR, fn))
-            s.set_volume(SOUND_VOL.get(key, 0.6))
+            s.set_volume(SOUND_VOL.get(key, 0.6) * MASTER_VOLUME)
             SOUNDS[key] = s
         except (pygame.error, FileNotFoundError):
             pass
+
+MASTER_VOLUME = 0.8
+
+def set_master_volume(v):
+    global MASTER_VOLUME
+    MASTER_VOLUME = max(0.0, min(1.0, v))
+    for key, s in SOUNDS.items():
+        s.set_volume(SOUND_VOL.get(key, 0.6) * MASTER_VOLUME)
 
 def play(name):
     s = SOUNDS.get(name)
@@ -226,6 +234,15 @@ CAR_FRICTION = 0.3
 WALL_RESTITUTION = 0.3  # bushes are a bit softer
 WALL_FRICTION = 0.5
 CONTACT_SLOP = 0.3      # px of overlap allowed before pushing apart
+
+# ---- drifting -----------------------------------------------------------------------------
+DRIFT_GRIP = 0.55       # rear-tyre grip while drifting (lower -> slides more)
+DRIFT_MIN_SPEED = 120.0 # px/s below which you can't charge a drift
+DRIFT_CHARGE_RATE = 1.0 # charge per second of clean drift
+DRIFT_MIN_CHARGE = 0.35 # charge needed to get any mini-boost on release
+DRIFT_MAX_CHARGE = 1.6  # charge caps here
+DRIFT_BOOST_TIME = 1.1  # boost seconds at full charge
+DRIFT_BOOST_KICK = 70.0 # instant forward px/s on release at full charge
 
 # ---- bashing ------------------------------------------------------------------------------
 BASH_COOLDOWN = 1.5     # seconds between bashes
@@ -931,6 +948,10 @@ class Car:
         self.off_f = self.off_r = 0.0   # how far onto the grass each axle is (0..1)
         self.slip_f = self.slip_r = 0.0 # tyre sideways slip, px/s (skid marks)
         self.boost_time = 0.0       # > 0 while a mystery-box speed boost is active
+        self.drift = False          # drift held this frame
+        self.was_drifting = False
+        self.drift_charge = 0.0     # builds while drifting, spent as a mini-boost on release
+        self.team = -1              # team index in team races, else -1
         # bashing
         self.bash_cd = 0.0          # seconds until the next bash is ready
         self.bash_time = 0.0        # > 0 while a bash/ram is active
@@ -1009,8 +1030,9 @@ class Car:
         loose = STAGGER_GRIP if self.stagger > 0 else 1.0
         if self.bash_time > 0:
             loose *= BASH_TIRE
+        rear = loose * (DRIFT_GRIP if self.drift else 1.0)      # drifting loosens the rear tyres
         cap_f = GRIP * (1 - self.off_f * (1 - GRASS_GRIP)) * loose * m * AXLE_REAR / WHEELBASE
-        cap_r = GRIP * (1 - self.off_r * (1 - GRASS_GRIP)) * loose * m * AXLE_FRONT / WHEELBASE
+        cap_r = GRIP * (1 - self.off_r * (1 - GRASS_GRIP)) * rear * m * AXLE_FRONT / WHEELBASE
 
         # engine: always pushing forward (backs up only while getting unstuck)
         if self.reverse_time > 0:
@@ -1358,22 +1380,30 @@ def _resolve_static(car, nx, ny, depth, px, py):
 # =================================================================================================
 # the world step
 # =================================================================================================
+def _ctrl(c):
+    # controls entries may be (steer, action) or (steer, action, drift)
+    return c[0], c[1], (c[2] if len(c) > 2 else False)
+
 def step(dt, cars, controls):
-    # controls: one (steer -1..1, action or None) per car; action = "left"/"right"/"ram"
-    for car, (steer, action) in zip(cars, controls):
+    # controls: one (steer -1..1, action or None[, drift]) per car; action = "left"/"right"/"ram"
+    for car, ctrl in zip(cars, controls):
+        steer, action, drift = _ctrl(ctrl)
         car.prepare()
+        car.drift = bool(drift) and not car.dead
         if action:
             car.start_bash(action)
     h = dt / PHYS_SUBSTEPS
     for _ in range(PHYS_SUBSTEPS):
-        for car, (steer, _) in zip(cars, controls):
-            car.integrate(h, steer)
+        for car, ctrl in zip(cars, controls):
+            car.integrate(h, ctrl[0])
         _collide_cars(cars)
         for car in cars:
             _collide_statics(car)
     for car in cars:
         car.omega = max(-MAX_SPIN, min(MAX_SPIN, car.omega))   # collisions can add spin too
         car.post_frame(dt)
+        _update_drift(car, dt)
+        _spawn_car_fx(car)
         # race progress along the loop (forward and backward both count, so it's honest)
         s, _, car.track_idx = track_coords(car.x, car.y, car.track_idx)
         if car.track_s is not None:
@@ -1393,6 +1423,39 @@ def step(dt, cars, controls):
     _pack_pacing(cars)
     _update_boxes(dt, cars)
     _update_particles(dt)
+
+def _update_drift(car, dt):
+    speed = math.hypot(car.vx, car.vy)
+    turning = abs(car.steer_angle) > 0.08
+    if car.drift and speed > DRIFT_MIN_SPEED and turning:
+        car.drift_charge = min(DRIFT_MAX_CHARGE, car.drift_charge + DRIFT_CHARGE_RATE * dt)
+    if car.was_drifting and not car.drift:      # released
+        if car.drift_charge >= DRIFT_MIN_CHARGE:
+            f = min(1.0, car.drift_charge / DRIFT_MAX_CHARGE)
+            car.boost_time = max(car.boost_time, DRIFT_BOOST_TIME * f)
+            rad = math.radians(car.angle)
+            car.vx += math.cos(rad) * DRIFT_BOOST_KICK * f
+            car.vy += math.sin(rad) * DRIFT_BOOST_KICK * f
+            spawn_particles(car.x, car.y, 10, 90, (120, 200, 255), 0.5)
+        car.drift_charge = 0.0
+    car.was_drifting = car.drift
+
+def _spawn_car_fx(car):
+    # surface dust off-road, boost flames, and the drift smoke that tints as the charge builds
+    speed = math.hypot(car.vx, car.vy)
+    off = 0.5 * (car.off_f + car.off_r)
+    rad = math.radians(car.angle)
+    bx, by = car.x - math.cos(rad) * CAR_HL, car.y - math.sin(rad) * CAR_HL
+    if off > 0.2 and speed > 60 and random.random() < 0.5:
+        spawn_particles(bx, by, 1, 40, (210, 200, 170), 0.5)   # kicked-up dust/grass
+    if car.drift and speed > DRIFT_MIN_SPEED and random.random() < 0.7:
+        f = car.drift_charge / DRIFT_MAX_CHARGE
+        col = (235, 235, 235) if f < 0.5 else (255, 190, 90) if f < 0.9 else (120, 200, 255)
+        spawn_particles(bx, by, 1, 50, col, 0.4)
+    if car.boost_time > 0 and random.random() < 0.6:
+        spawn_particles(bx, by, 1, 70, (255, 160, 60), 0.35)
+    if car.impact > 70:        # sparks on a hard scrape / collision
+        spawn_particles(car.x, car.y, 6, 150, (255, 240, 150), 0.3)
 
 def _pack_pacing(cars):
     # keep the bots around the player (or around each other with no player): a bot that's
@@ -1746,6 +1809,13 @@ def _text_outlined(font, text, color, outline=(15, 15, 20)):
         surf.blit(edge, (dx, dy))
     surf.blit(base, (1, 1))
     return surf
+
+def draw_ghost(screen, cam, x, y, angle):
+    # faint outline of your best-lap ghost in Time Trial
+    rad = math.radians(angle)
+    c, s = math.cos(rad), math.sin(rad)
+    pts = [cam.to_screen(x + lx * c - ly * s, y + lx * s + ly * c) for lx, ly in KART_BODY]
+    pygame.draw.polygon(screen, (190, 215, 255), pts, 2)
 
 def draw_name_labels(screen, cars, cam):
     font = get_font(18)
