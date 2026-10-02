@@ -324,9 +324,10 @@ def main():
         gyro_state["smooth_steer"] += (raw - gyro_state["smooth_steer"]) * GYRO_SMOOTH
         return gyro_state["smooth_steer"]
 
-    font_big = sim.get_font(64)
-    font = sim.get_font(40)
-    font_small = sim.get_font(26)
+    font_big = sim.get_font(56)
+    font = sim.get_font(34)
+    font_btn = sim.get_font(24)
+    font_small = sim.get_font(20)
 
     # gameplay screenshot used as the backdrop for menus / results, dimmed for legibility
     try:
@@ -356,19 +357,19 @@ def main():
         else:
             screen.fill((30, 60, 30))
 
-    # STEER logo for the top-left of the menu / mode screens
+    # STEER logo for the top-left of the menu / mode screens (enlarged)
     try:
         _logo = pygame.image.load(os.path.join(sim.UI_DIR, "logo.png")).convert_alpha()
-        lh = 68
+        lh = 110
         logo = pygame.transform.scale(_logo, (round(_logo.get_width() * lh / _logo.get_height()), lh))
     except (pygame.error, FileNotFoundError):
         logo = None
 
     def draw_logo():
         if logo is not None:
-            screen.blit(logo, (16, 12))
+            screen.blit(logo, (18, 16))
         else:
-            screen.blit(font_big.render("STEER", True, (255, 255, 255)), (16, 12))
+            screen.blit(sim.get_font(72).render("STEER", True, (255, 255, 255)), (18, 16))
 
     profile = load_profile()
     keybinds = dict(DEFAULT_KEYS)
@@ -693,16 +694,16 @@ def main():
         else:
             items.append(("play", "Play"))
         items += [("settings", "Settings"), ("quit", "Quit")]
-        bh = 42
-        y0 = sim.H - 14 - bh * len(items)
-        menu_buttons = [(nm, Button((16, y0 + i * bh, 240, bh), lbl, align="left"))
+        bh = 32
+        y0 = sim.H - 18 - bh * len(items)
+        menu_buttons = [(nm, Button((18, y0 + i * bh, 200, bh), lbl, align="left"))
                         for i, (nm, lbl) in enumerate(items)]
         menu_sel = max(0, min(menu_sel, len(menu_buttons) - 1))
 
         # mode screen (Singleplayer / Multiplayer / Back), same bottom-left stack
         mode_items = [("single", "Singleplayer"), ("multi", "Multiplayer"), ("back", "Back")]
-        mode_y0 = sim.H - 14 - bh * len(mode_items)
-        mode_buttons = [(nm, Button((16, mode_y0 + i * bh, 260, bh), lbl, align="left"))
+        mode_y0 = sim.H - 18 - bh * len(mode_items)
+        mode_buttons = [(nm, Button((18, mode_y0 + i * bh, 220, bh), lbl, align="left"))
                         for i, (nm, lbl) in enumerate(mode_items)]
         mode_sel = max(0, min(mode_sel, len(mode_buttons) - 1))
 
@@ -1218,7 +1219,7 @@ def main():
             draw_bg()
             draw_logo()
             for i, (_, btn) in enumerate(menu_buttons):
-                btn.draw(screen, font, btn.clicked(mouse_pos) or i == menu_sel)
+                btn.draw(screen, font_btn, btn.clicked(mouse_pos) or i == menu_sel)
 
         elif state == "name_entry":
             draw_bg()
@@ -1306,7 +1307,7 @@ def main():
             draw_bg()
             draw_logo()
             for i, (_, btn) in enumerate(mode_buttons):
-                btn.draw(screen, font, i == mode_sel)
+                btn.draw(screen, font_btn, i == mode_sel)
 
         elif state == "gamemode":
             draw_bg()

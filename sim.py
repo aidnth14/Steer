@@ -138,12 +138,14 @@ def play(name):
             s.play()
         except pygame.error:
             pass
-FONT_PATH = os.path.join(ASSET_DIR, "font", "Jersey25-Regular.ttf")
+PIXEMON_PATH = os.path.join(ASSET_DIR, "pixemon", "Pixemon.otf")
+JERSEY_PATH = os.path.join(ASSET_DIR, "font", "Jersey25-Regular.ttf")
+FONT_PATH = PIXEMON_PATH if os.path.exists(PIXEMON_PATH) else JERSEY_PATH
 UI = {}             # UI icon surfaces by name
 _FONT_CACHE = {}
 
 def get_font(size):
-    # Jersey 25 pixel font, cached per size; falls back to the pygame default if missing
+    # Pixel font (Pixemon / Jersey), cached per size; falls back to default if missing
     key = int(size)
     if key not in _FONT_CACHE:
         try:
@@ -2191,6 +2193,29 @@ def draw_boxes(screen, cam):
         if box["timer"] <= 0:
             draw_box(screen, box, cam)
 
+_FOG_SURF = None
+
+def draw_fog(screen):
+    global _FOG_SURF
+    if _FOG_SURF is None:
+        _FOG_SURF = pygame.Surface((W, H), pygame.SRCALPHA)
+        # Gentle ambient cool mist tint
+        _FOG_SURF.fill((210, 222, 235, 18))
+        # Soft organic mist puffs
+        for x, y, rad, a in [
+            (int(W * 0.25), int(H * 0.28), 260, 22),
+            (int(W * 0.65), int(H * 0.62), 320, 20),
+            (int(W * 0.85), int(H * 0.32), 240, 18),
+            (int(W * 0.38), int(H * 0.82), 280, 20),
+        ]:
+            m = pygame.Surface((rad * 2, rad * 2), pygame.SRCALPHA)
+            for r in range(rad, 0, -8):
+                fa = int(a * ((1.0 - r / rad) ** 1.5))
+                if fa > 0:
+                    pygame.draw.circle(m, (220, 232, 245, fa), (rad, rad), r)
+            _FOG_SURF.blit(m, (x - rad, y - rad))
+    screen.blit(_FOG_SURF, (0, 0))
+
 def draw_world(screen, cam, cars):
     draw_ground(screen, cam)
     draw_trails(screen, cars, cam)
@@ -2200,6 +2225,7 @@ def draw_world(screen, cam, cars):
     for car in cars:
         draw_car(screen, car, cam)
     draw_particles(screen, cam)
+    draw_fog(screen)
     draw_name_labels(screen, cars, cam)
 
 def _heart_points(x, y, size):
