@@ -25,6 +25,7 @@ PAD_LEFT = pygame.CONTROLLER_BUTTON_DPAD_LEFT
 PAD_RIGHT = pygame.CONTROLLER_BUTTON_DPAD_RIGHT
 
 SIM_PATH = os.path.join(os.path.dirname(__file__), "sim.py")
+MAIN_PATH = os.path.abspath(__file__)
 PROFILE_PATH = os.path.join(os.path.expanduser("~"), ".steer_profile.json")
 
 # rebindable keyboard actions (defaults); stored per-user in the profile
@@ -286,6 +287,16 @@ def main():
     cars, player, cam = [], None, None
     final_order = []        # frozen leaderboard shown on the results screen
     last_mtime = os.path.getmtime(SIM_PATH)
+    main_mtime = os.path.getmtime(MAIN_PATH)
+
+    def restart():
+        # relaunch the whole process so edits to main.py (menus / UI / game loop) take effect
+        print("main.py changed -> restarting for UI hot reload")
+        try:
+            pygame.quit()
+        except pygame.error:
+            pass
+        os.execv(sys.executable, [sys.executable, MAIN_PATH] + sys.argv[1:])
 
     def start_game():
         nonlocal cars, player, cam, current_seed, state, countdown, go_timer, online
@@ -423,6 +434,19 @@ def main():
     while running:
         dt = min(clock.tick(60) / 1000.0, 1 / 30)   # clamp so a freeze/stall can't teleport the car
         mouse_pos = pygame.mouse.get_pos()
+
+        # hot reload: main.py edits restart the process; sim.py edits reload live. In a race,
+        # sim.py is handled below (state carries over); everywhere else, reload it in place so
+        # menu / HUD draw-code changes show without a restart.
+        try:
+            mm, sm = os.path.getmtime(MAIN_PATH), os.path.getmtime(SIM_PATH)
+        except OSError:
+            mm, sm = main_mtime, last_mtime
+        if mm != main_mtime:
+            restart()
+        if sm != last_mtime and state != "playing":
+            last_mtime = sm
+            try_reload()
 
         # ---- drain anything the server sent since last frame ----------------------
         if netc is not None:

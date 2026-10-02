@@ -23,6 +23,10 @@ python3 main.py
 
 All keyboard actions are **rebindable** in Settings.
 
+**Hot reload:** saving `sim.py` reloads it live (gameplay/HUD/draw code — a race in progress
+carries its state over); saving `main.py` (menus / UI / game loop) auto-restarts the game so
+the change takes effect. Both are detected automatically while the game is open.
+
 Bashes share one cooldown (1.5 s); the bar under your hearts shows when it's ready.
 
 **Controllers** (Xbox / PlayStation / Nintendo, via SDL's game-controller layer — one
