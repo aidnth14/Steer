@@ -750,6 +750,45 @@ def build_ground():
     GROUND_SURF = surf
 
 
+# ---- minimap -----------------------------------------------------------------------
+MINIMAP = None          # scaled-down baked map, built once per track
+MINIMAP_MAX = 112       # longest side in px
+MM_SCALE = 1.0
+MM_ORIGIN = (0, 0)      # world coords of the minimap's (0, 0), same as GROUND_ORIGIN
+
+def _build_minimap():
+    global MINIMAP, MM_SCALE, MM_ORIGIN
+    if GROUND_SURF is None:
+        MINIMAP = None
+        return
+    gw, gh = GROUND_SURF.get_size()
+    MM_SCALE = MINIMAP_MAX / max(gw, gh)
+    MINIMAP = pygame.transform.smoothscale(
+        GROUND_SURF, (max(1, round(gw * MM_SCALE)), max(1, round(gh * MM_SCALE))))
+    MM_ORIGIN = GROUND_ORIGIN
+
+def draw_minimap(screen, cars, player):
+    if MINIMAP is None:
+        return
+    mw, mh = MINIMAP.get_size()
+    px, py = W - mw - 10, H - mh - 10            # bottom-right corner
+    pygame.draw.rect(screen, (18, 24, 18), (px - 3, py - 3, mw + 6, mh + 6), border_radius=4)
+    screen.blit(MINIMAP, (px, py))
+    pygame.draw.rect(screen, (235, 235, 235), (px - 3, py - 3, mw + 6, mh + 6), 1, border_radius=4)
+    ox, oy = MM_ORIGIN
+    for c in cars:
+        mx = px + (c.x - ox) * MM_SCALE
+        my = py + (c.y - oy) * MM_SCALE
+        if not (px <= mx <= px + mw and py <= my <= py + mh):
+            continue
+        if c is player:
+            pygame.draw.circle(screen, (255, 255, 255), (int(mx), int(my)), 4)
+            pygame.draw.circle(screen, (20, 20, 20), (int(mx), int(my)), 4, 1)
+        elif not c.dead:
+            pygame.draw.circle(screen, c.color, (int(mx), int(my)), 3)
+            pygame.draw.circle(screen, (20, 20, 20), (int(mx), int(my)), 3, 1)
+
+
 def new_map(seed):
     # builds the whole track + fences in one shot (no incremental generation)
     global ROAD, ROAD_S, ROAD_T, ROAD_LEN, DIRT, ROAD_NEAR, MAP_SEED
@@ -761,6 +800,7 @@ def new_map(seed):
     ROAD_NEAR = _near_road_grid(DIRT, FENCE_OFFSET + 1)
     generate_fences()
     build_ground()
+    _build_minimap()
     spawn_boxes()
     del PARTICLES[:]
 
@@ -1425,7 +1465,8 @@ class Camera:
         dx, dy = wrap_delta(self.x, wx), wrap_delta(self.y, wy)
         rad = -math.radians(self.angle + 90)   # camera's forward points to the top of the screen
         c, s = math.cos(rad), math.sin(rad)
-        return (W / 2 + dx * c - dy * s + self.ox, H / 2 + dx * s + dy * c + self.oy)
+        return (W / 2 + (dx * c - dy * s) * ZOOM + self.ox,
+                H / 2 + (dx * s + dy * c) * ZOOM + self.oy)
 
 
 # =================================================================================================
@@ -1548,7 +1589,8 @@ def apply_net_state(car, d, t=1.0):
 # =================================================================================================
 # drawing
 # =================================================================================================
-_CHUNK = int(math.hypot(W, H)) + 8 * TILE   # square big enough to still cover the screen once rotated
+ZOOM = 1.3          # camera zoom; >1 shows less of the world, bigger karts
+_CHUNK = int(math.hypot(W, H) / ZOOM) + 8 * TILE   # baked-map square that still covers the screen
 _chunk_surf = None
 _overlay = None
 
@@ -1567,7 +1609,7 @@ def draw_ground(screen, cam):
     top = math.floor(cam.y - oy - _CHUNK / 2)
     _chunk_surf.fill(GRASS_COLOR)
     _chunk_surf.blit(GROUND_SURF, (-left, -top))  # pygame clips this to the overlap
-    rot = pygame.transform.rotate(_chunk_surf, cam.angle + 90)
+    rot = pygame.transform.rotozoom(_chunk_surf, cam.angle + 90, ZOOM)  # rotate + zoom in one
     # put the chunk's centre exactly where the camera maps that world point, so the ground
     # and the karts never drift apart by a pixel
     sx, sy = cam.to_screen(ox + left + _CHUNK / 2, oy + top + _CHUNK / 2)
@@ -1824,3 +1866,4 @@ def draw_hud(screen, car, font=None, cars=None):
     screen.blit(best_s, best_s.get_rect(midtop=(W / 2, 24)))
     if cars is not None:
         draw_leaderboard(screen, cars, car)
+        draw_minimap(screen, cars, car)

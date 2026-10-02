@@ -163,6 +163,8 @@ Lobby, ready-up, kick, auto-start, and host migration are all handled server-sid
 - **Effects**: skid marks from real tyre slip, surface dust off-road, drift smoke, boost
   flames, collision sparks, screen shake.
 - **Position popups**: your place in the running order flashes up when it changes.
+- **Minimap**: a scaled view of the whole track in the bottom-right corner, a dot per kart
+  with your own highlighted. The race view is zoomed in (`sim.ZOOM`).
 
 ## Not built yet
 

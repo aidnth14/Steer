@@ -907,9 +907,6 @@ def main():
             screen.blit(title, title.get_rect(center=(sim.W / 2, 55)))
             for i, (_, btn) in enumerate(menu_buttons):
                 btn.draw(screen, font, btn.clicked(mouse_pos) or i == menu_sel)
-            for i, line in enumerate(HELP_LINES):
-                text = font_small.render(line, True, (200, 220, 200))
-                screen.blit(text, text.get_rect(center=(sim.W / 2, sim.H - 66 + i * 22)))
 
         elif state == "name_entry":
             draw_bg()
