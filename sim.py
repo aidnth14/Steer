@@ -690,7 +690,16 @@ def generate_fences():
 
 
 GROUND_SURF = None      # grass + tiled road + fences, baked once per map
+GROUND_Z = None         # GROUND_SURF pre-scaled by ZOOM, so draw_ground only has to rotate
 GROUND_ORIGIN = (0, 0)  # world coords of GROUND_SURF's top-left pixel
+
+def _build_zoomed_ground():
+    global GROUND_Z
+    if GROUND_SURF is None:
+        GROUND_Z = None
+        return
+    gw, gh = GROUND_SURF.get_size()
+    GROUND_Z = pygame.transform.smoothscale(GROUND_SURF, (round(gw * ZOOM), round(gh * ZOOM)))
 
 def _bake_finish(surf, ox, oy):
     # checkered start/finish line baked across the road at the start, aligned to the road
@@ -751,6 +760,7 @@ def build_ground():
         else:
             surf.blit(tile, (px, py))
     GROUND_SURF = surf
+    _build_zoomed_ground()
 
 
 # ---- minimap -----------------------------------------------------------------------
@@ -1621,29 +1631,32 @@ def apply_net_state(car, d, t=1.0):
 # drawing
 # =================================================================================================
 ZOOM = 1.3          # camera zoom; >1 shows less of the world, bigger karts
-_CHUNK = int(math.hypot(W, H) / ZOOM) + 8 * TILE   # baked-map square that still covers the screen
+# chunk is in *zoomed-ground* pixels and sized to still cover the screen once rotated. Using a
+# ground that's pre-scaled by ZOOM lets us rotate() each frame (fast) instead of rotozoom() (slow).
+_CHUNK = int(math.hypot(W, H)) + 6 * TILE
 _chunk_surf = None
 _overlay = None
 
 def draw_ground(screen, cam):
-    # Grass everywhere, then the part of the baked map around the camera, rotated to match it.
+    # Grass everywhere, then the part of the (pre-zoomed) baked map around the camera, rotated.
     global _chunk_surf
     screen.fill(GRASS_COLOR)
-    if GROUND_SURF is None:
+    if GROUND_Z is None:
         return
     if _chunk_surf is None:
-        # per-pixel alpha so rotate() pads the corners with transparent (not black); any screen
-        # area the rotated chunk doesn't cover then shows the grass fill underneath
-        _chunk_surf = pygame.Surface((_CHUNK, _CHUNK), pygame.SRCALPHA)
+        # plain (no per-pixel alpha) for a fast rotate(); the chunk over-covers the screen, so
+        # rotate's black corner padding always falls outside the visible area
+        _chunk_surf = pygame.Surface((_CHUNK, _CHUNK)).convert()
     ox, oy = GROUND_ORIGIN
-    left = math.floor(cam.x - ox - _CHUNK / 2)   # chunk's top-left in baked-image pixels
-    top = math.floor(cam.y - oy - _CHUNK / 2)
+    left = math.floor((cam.x - ox) * ZOOM - _CHUNK / 2)   # top-left in zoomed-ground pixels
+    top = math.floor((cam.y - oy) * ZOOM - _CHUNK / 2)
     _chunk_surf.fill(GRASS_COLOR)
-    _chunk_surf.blit(GROUND_SURF, (-left, -top))  # pygame clips this to the overlap
-    rot = pygame.transform.rotozoom(_chunk_surf, cam.angle + 90, ZOOM)  # rotate + zoom in one
-    # put the chunk's centre exactly where the camera maps that world point, so the ground
-    # and the karts never drift apart by a pixel
-    sx, sy = cam.to_screen(ox + left + _CHUNK / 2, oy + top + _CHUNK / 2)
+    _chunk_surf.blit(GROUND_Z, (-left, -top))             # clipped to the overlap
+    rot = pygame.transform.rotate(_chunk_surf, cam.angle + 90)
+    # chunk centre back in world coords, mapped to screen (to_screen already applies ZOOM)
+    wcx = (left + _CHUNK / 2) / ZOOM + ox
+    wcy = (top + _CHUNK / 2) / ZOOM + oy
+    sx, sy = cam.to_screen(wcx, wcy)
     screen.blit(rot, rot.get_rect(center=(round(sx), round(sy))))
 
 def _get_overlay():
