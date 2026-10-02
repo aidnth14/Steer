@@ -1841,16 +1841,29 @@ def draw_leaderboard(screen, cars, player):
             tag = _text_outlined(font, f"L{min(lap_of(c) + 1, TOTAL_LAPS)}", (185, 200, 180))
         screen.blit(tag, tag.get_rect(topright=(x + w - 6, yc)))
 
+    # the player's lap count, x / y, under the board
+    cur = min(lap_of(player) + 1, TOTAL_LAPS)
+    lap_s = _text_outlined(get_font(26), f"LAP {cur}/{TOTAL_LAPS}", (255, 235, 120))
+    screen.blit(lap_s, lap_s.get_rect(topright=(x + w - 6, y0 + 18 + len(order) * row_h + 4)))
+
+def _pixel_bar(screen, color, rect, r=2):
+    # a filled bar with chunky (pixel-art) rounded corners: a plus of two rects
+    x, y, w, h = rect
+    if w <= 0 or h <= 0:
+        return
+    if w <= 2 * r or h <= 2 * r:
+        pygame.draw.rect(screen, color, rect)
+        return
+    pygame.draw.rect(screen, color, (x + r, y, w - 2 * r, h))
+    pygame.draw.rect(screen, color, (x, y + r, w, h - 2 * r))
+
 def draw_hud(screen, car, font=None, cars=None):
     draw_hearts(screen, car.hearts)
-    # bash meter under the hearts: fills up while recharging, bright when ready
-    x, y, w, h = 14, 42, 72, 7
+    # bash meter under the hearts: one blue bar, rounded pixel corners, no label
+    x, y, w, h = 14, 44, 76, 9
     ready = 1.0 - car.bash_cd / BASH_COOLDOWN
-    pygame.draw.rect(screen, (30, 30, 35), (x - 1, y - 1, w + 2, h + 2))
-    pygame.draw.rect(screen, (255, 200, 60) if ready >= 1 else (140, 140, 150), (x, y, int(w * ready), h))
-    label_font = font or get_font(20)
-    label = label_font.render("BASH" if ready >= 1 else "...", True, (255, 255, 255))
-    screen.blit(label, (x + w + 6, y - 5))
+    _pixel_bar(screen, (28, 30, 38), (x - 1, y - 1, w + 2, h + 2), r=2)
+    _pixel_bar(screen, (70, 150, 255), (x, y, int(w * ready), h), r=2)
     # lap time (current) + best, top-centre
     tf = get_font(22)
     cur = max(0.0, car.race_t - car.last_lap_t)
