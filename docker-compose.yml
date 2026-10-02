@@ -1,0 +1,19 @@
+# Local multi-instance Steer server behind Redis.
+# `docker compose up --scale server=3` runs three server replicas sharing lobbies through
+# Redis; point game clients at ws://localhost:8765 (compose load-balances across replicas).
+services:
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    ports:
+      - "6379:6379"
+
+  server:
+    build: .
+    environment:
+      PORT: "8765"
+      REDIS_URL: "redis://redis:6379"
+    ports:
+      - "8765:8765"
+    depends_on:
+      - redis

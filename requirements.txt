@@ -1,3 +1,6 @@
 # Game client (local): needs the window + networking
 pygame>=2.5
 websockets>=14
+# Server only (optional): enables multi-instance scaling via Redis. The server runs fine
+# without it (in-memory, single instance). Set REDIS_URL to turn it on.
+redis>=5
