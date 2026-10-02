@@ -204,6 +204,126 @@ def main():
                 pass
         return False
 
+    # Gyroscope / mobile device tilt detection for steering
+    gyro_state = {
+        "tilt": 0.0,
+        "smooth_steer": 0.0,
+        "source": "none",
+        "active": False,
+    }
+
+    # 1. HTML5 / Pygbag / Emscripten browser DeviceOrientation
+    try:
+        import platform
+        if platform.system() == "Emscripten":
+            import js
+            js.eval("""
+            (function() {
+                if (window._steer_gyro_init) return;
+                window._steer_gyro_init = true;
+                window._steer_tilt = 0.0;
+                function onOrientation(e) {
+                    var angle = (screen.orientation && screen.orientation.angle) || window.orientation || 0;
+                    var t = 0.0;
+                    if (angle === 90) {
+                        t = -e.beta;
+                    } else if (angle === -90 || angle === 270) {
+                        t = e.beta;
+                    } else {
+                        t = e.gamma;
+                    }
+                    if (t !== null && !isNaN(t)) {
+                        window._steer_tilt = t;
+                    }
+                }
+                if (typeof window.DeviceOrientationEvent !== 'undefined') {
+                    if (typeof window.DeviceOrientationEvent.requestPermission === 'function') {
+                        document.addEventListener('touchstart', function() {
+                            window.DeviceOrientationEvent.requestPermission().then(function(res) {
+                                if (res === 'granted') {
+                                    window.addEventListener('deviceorientation', onOrientation, true);
+                                }
+                            }).catch(function() {});
+                        }, { once: true });
+                    } else {
+                        window.addEventListener('deviceorientation', onOrientation, true);
+                    }
+                }
+            })();
+            """)
+            gyro_state["source"] = "web"
+            gyro_state["active"] = True
+    except Exception:
+        pass
+
+    # 2. SDL2 Joystick / Accelerometer Sensor (Android / iOS Pygame ports)
+    accel_sensors = []
+    try:
+        if not pygame.joystick.get_init():
+            pygame.joystick.init()
+        for idx in range(pygame.joystick.get_count()):
+            try:
+                j = pygame.joystick.Joystick(idx)
+                j.init()
+                name = j.get_name().lower()
+                if any(k in name for k in ("accelerometer", "gyro", "sensor", "tilt")):
+                    accel_sensors.append(j)
+                    gyro_state["source"] = "joystick_sensor"
+                    gyro_state["active"] = True
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    # 3. Android JNI / Plyer fallback
+    try:
+        from plyer import accelerometer
+        accelerometer.enable()
+        gyro_state["source"] = "plyer"
+        gyro_state["active"] = True
+    except Exception:
+        pass
+
+    GYRO_DEADZONE = 0.06       # ~3.5 deg deadzone
+    GYRO_MAX_DEG = 25.0        # 25 degrees tilt = 100% full steering lock
+    GYRO_SMOOTH = 0.25         # smoothing factor
+
+    def gyro_steer():
+        raw = 0.0
+        if gyro_state["source"] == "web":
+            try:
+                import js
+                deg = float(js.window._steer_tilt or 0.0)
+                raw = max(-1.0, min(1.0, deg / GYRO_MAX_DEG))
+            except Exception:
+                raw = 0.0
+        elif gyro_state["source"] == "joystick_sensor":
+            for j in accel_sensors:
+                try:
+                    if j.get_numaxes() > 0:
+                        raw += j.get_axis(0)
+                except Exception:
+                    pass
+            raw = max(-1.0, min(1.0, raw))
+        elif gyro_state["source"] == "plyer":
+            try:
+                from plyer import accelerometer
+                val = accelerometer.acceleration
+                if val and val[0] is not None:
+                    raw = max(-1.0, min(1.0, (val[0] / 9.81) * 2.2))
+            except Exception:
+                pass
+
+        # Allow programmatic / simulated tilt for tests and mobile companions
+        sim_tilt = getattr(sim, "MOBILE_TILT", None)
+        if sim_tilt is not None:
+            raw = max(-1.0, min(1.0, sim_tilt))
+
+        if abs(raw) < GYRO_DEADZONE:
+            raw = 0.0
+        gyro_state["smooth_steer"] += (raw - gyro_state["smooth_steer"]) * GYRO_SMOOTH
+        return gyro_state["smooth_steer"]
+
     font_big = sim.get_font(64)
     font = sim.get_font(40)
     font_small = sim.get_font(26)
@@ -950,7 +1070,7 @@ def main():
                     steer -= 1
                 if keys[pygame.K_RIGHT] or keys[keybinds["right"]]:
                     steer += 1
-                steer = max(-1.0, min(1.0, steer + pad_steer()))
+                steer = max(-1.0, min(1.0, steer + pad_steer() + gyro_steer()))
                 drift = keys[keybinds["drift"]] or pad_drift()
 
                 spectating = online and player.dead

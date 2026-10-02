@@ -319,13 +319,22 @@ INNER = None        # 2x2 inner-corner road tiles, [qy][qx]
 CHECK = None        # checkered finish-line tile (center)
 CHECK_TILES = {}    # center, left, right, top, bottom check tiles
 FENCE = {}          # (up, down, left, right) -> 16 px fence piece, all 16 combinations
+PARTICLE_RAW = None # 16x16 star particle graphic from assets/particle.png
+_PARTICLE_CACHE = {} # (r, g, b, size, alpha_step) -> cached tinted pygame.Surface
 
 def load_assets():
     # needs a display surface to exist (convert); called at startup and after each hot reload
-    global TILES, INNER, GRASS_COLOR, DIRT_COLOR, CHECK, CHECK_TILES
+    global TILES, INNER, GRASS_COLOR, DIRT_COLOR, CHECK, CHECK_TILES, PARTICLE_RAW
     TILES = INNER = None
     FENCE.clear()
     CHECK_TILES.clear()
+    _PARTICLE_CACHE.clear()
+
+    try:
+        PARTICLE_RAW = _load(ASSET_DIR, "particle", alpha=True)
+    except (pygame.error, FileNotFoundError) as e:
+        print("particle sprite missing, using fallback:", e)
+        PARTICLE_RAW = None
 
     grid = [[None] * 3 for _ in range(3)]
     for key, fn in (("center", "checktile"), ("left", "checktile1"), ("right", "checktile2"),
@@ -1046,6 +1055,7 @@ class Car:
         self.track_s = None         # where on the loop the kart is now
         self.track_idx = None
         self.trail = []             # skid marks: [x, y, life]
+        self.last_wheel_pos = {}    # wheel_id -> (wx, wy) for continuous permanent ground tracks
         self.hearts = HEART_COUNT
         self.dead = False           # out of the race (hearts hit 0)
         self.was_on_road = True
@@ -1251,19 +1261,49 @@ class Car:
         else:
             self.slow_time = 0.0
 
-        # skid marks where the tyres slide on dirt; dust where they churn up grass
-        self.trail = [[tx, ty, life - dt] for tx, ty, life in self.trail if life - dt > 0]
+        # permanent tyre tracks baked directly onto the ground
         rad = math.radians(self.angle)
         c, s = math.cos(rad), math.sin(rad)
+        if GROUND_Z is not None:
+            ox, oy = GROUND_ORIGIN
+            # Rear wheels skid during drift or high slip; front wheels during severe slip
+            skid_specs = (
+                ("rl", -AXLE_REAR, -1, (self.slip_r > SKID_SLIP or self.drift), self.off_r),
+                ("rr", -AXLE_REAR, 1, (self.slip_r > SKID_SLIP or self.drift), self.off_r),
+                ("fl", AXLE_FRONT, -1, self.slip_f > SKID_SLIP * 1.35, self.off_f),
+                ("fr", AXLE_FRONT, 1, self.slip_f > SKID_SLIP * 1.35, self.off_f),
+            )
+            for wname, ax, side, skidding, off in skid_specs:
+                wx = self.x + c * ax - s * side * WHEEL_Y
+                wy = self.y + s * ax + c * side * WHEEL_Y
+                if skidding and not self.dead:
+                    prev = self.last_wheel_pos.get(wname)
+                    if prev is not None:
+                        pwx, pwy = prev
+                        dx, dy = wx - pwx, wy - pwy
+                        dist_sq = dx * dx + dy * dy
+                        # Normal frame motion (0.2px to 35px), ignore respawns / teleports
+                        if 0.04 <= dist_sq < 1225.0:
+                            p0 = ((pwx - ox) * ZOOM, (pwy - oy) * ZOOM)
+                            p1 = ((wx - ox) * ZOOM, (wy - oy) * ZOOM)
+                            col = (46, 28, 22) if off < 0.5 else (40, 42, 24)
+                            w = 4 if self.drift else 3
+                            pygame.draw.line(GROUND_Z, col, p0, p1, w)
+                    self.last_wheel_pos[wname] = (wx, wy)
+                else:
+                    self.last_wheel_pos[wname] = None
+
+        # skid marks where the tyres slide on dirt; dust where they churn up grass
+        self.trail = [[tx, ty, life - dt] for tx, ty, life in self.trail if life - dt > 0]
         for slip, ax, off in ((self.slip_r, -AXLE_REAR, self.off_r), (self.slip_f, AXLE_FRONT, self.off_f)):
-            if slip > SKID_SLIP and off < 0.5:
+            if (slip > SKID_SLIP or self.drift) and off < 0.5:
                 for side in (-1, 1):
                     self.trail.append([self.x + c * ax - s * side * WHEEL_Y,
                                        self.y + s * ax + c * side * WHEEL_Y, TRAIL_LIFE])
         if len(self.trail) > TRAIL_MAX_POINTS:
             self.trail = self.trail[-TRAIL_MAX_POINTS:]
         if self.off_r > 0.3 and speed > 60 and self.rng.random() < 0.6:
-            spawn_particles(self.x - c * AXLE_REAR, self.y - s * AXLE_REAR, 1, 30, (120, 150, 70), 0.5)
+            spawn_particles(self.x - c * AXLE_REAR, self.y - s * AXLE_REAR, 1, 30, (120, 160, 70), 0.5)
         elif self.slip_r > SKID_SLIP * 2 and self.rng.random() < 0.4:
             spawn_particles(self.x - c * AXLE_REAR, self.y - s * AXLE_REAR, 1, 25, (205, 150, 110), 0.5)
 
@@ -1277,6 +1317,8 @@ class Car:
         self.track_s = s
         self.wedged = self.slow_time = self.reverse_time = 0.0
         self.flash = 0.6
+        if hasattr(self, "last_wheel_pos"):
+            self.last_wheel_pos.clear()
         spawn_particles(self.x, self.y, 14, 80, (255, 255, 255), 0.5)
 
     def corners(self):
@@ -1536,7 +1578,8 @@ def _update_drift(car, dt):
             rad = math.radians(car.angle)
             car.vx += math.cos(rad) * DRIFT_BOOST_KICK * f
             car.vy += math.sin(rad) * DRIFT_BOOST_KICK * f
-            spawn_particles(car.x, car.y, 10, 90, (120, 200, 255), 0.5)
+            bcol = (90, 215, 255) if f >= 0.9 else (255, 180, 50)
+            spawn_particles(car.x - math.cos(rad) * CAR_HL, car.y - math.sin(rad) * CAR_HL, int(14 * f), 110, bcol, 0.5)
         car.drift_charge = 0.0
     car.was_drifting = car.drift
 
@@ -1545,17 +1588,27 @@ def _spawn_car_fx(car):
     speed = math.hypot(car.vx, car.vy)
     off = 0.5 * (car.off_f + car.off_r)
     rad = math.radians(car.angle)
-    bx, by = car.x - math.cos(rad) * CAR_HL, car.y - math.sin(rad) * CAR_HL
-    if off > 0.2 and speed > 60 and random.random() < 0.5:
-        spawn_particles(bx, by, 1, 40, (210, 200, 170), 0.5)   # kicked-up dust/grass
-    if car.drift and speed > DRIFT_MIN_SPEED and random.random() < 0.7:
-        f = car.drift_charge / DRIFT_MAX_CHARGE
-        col = (235, 235, 235) if f < 0.5 else (255, 190, 90) if f < 0.9 else (120, 200, 255)
-        spawn_particles(bx, by, 1, 50, col, 0.4)
-    if car.boost_time > 0 and random.random() < 0.6:
-        spawn_particles(bx, by, 1, 70, (255, 160, 60), 0.35)
+    c, s = math.cos(rad), math.sin(rad)
+    bx, by = car.x - c * CAR_HL, car.y - s * CAR_HL
+    if off > 0.2 and speed > 60 and random.random() < 0.6:
+        col = (115, 175, 75) if off > 0.5 else (195, 140, 95)
+        spawn_particles(bx, by, 1, 40, col, 0.45)   # kicked-up dust/grass
+    if car.drift and speed > DRIFT_MIN_SPEED:
+        f = min(1.0, car.drift_charge / DRIFT_MAX_CHARGE)
+        col = (240, 240, 240) if f < 0.5 else (255, 175, 50) if f < 0.9 else (85, 215, 255)
+        for side in (-1, 1):
+            if random.random() < 0.75:
+                tx = car.x - c * AXLE_REAR - s * side * WHEEL_Y
+                ty = car.y - s * AXLE_REAR + c * side * WHEEL_Y
+                spawn_particles(tx, ty, 1, 55, col, 0.4)
+    if car.boost_time > 0:
+        for side in (-1, 1):
+            if random.random() < 0.7:
+                tx = car.x - c * CAR_HL - s * side * 4
+                ty = car.y - s * CAR_HL + c * side * 4
+                spawn_particles(tx, ty, 1, 75, (255, 155, 45) if random.random() < 0.7 else (255, 225, 95), 0.35)
     if car.impact > 70:        # sparks on a hard scrape / collision
-        spawn_particles(car.x, car.y, 6, 150, (255, 240, 150), 0.3)
+        spawn_particles(car.x, car.y, min(int(car.impact / 20), 10), 150, (255, 240, 150), 0.35)
 
 def _pack_pacing(cars):
     # keep the bots around the player (or around each other with no player): a bot that's
@@ -1839,29 +1892,52 @@ def _get_overlay():
     return _overlay
 
 def draw_trails(screen, cars, cam):
-    overlay = None
-    for car in cars:
-        for wx, wy, life in car.trail:
-            sx, sy = cam.to_screen(wx, wy)
-            if -6 <= sx <= W + 6 and -6 <= sy <= H + 6:
-                if overlay is None:
-                    overlay = _get_overlay()
-                alpha = max(0, min(150, int(150 * life / TRAIL_LIFE)))
-                pygame.draw.rect(overlay, (60, 35, 30, alpha), (int(sx) - 1, int(sy) - 1, 3, 3))
-    if overlay is not None:
-        screen.blit(overlay, (0, 0))
+    # Tyre tracks are permanently baked into GROUND_Z and displayed by draw_ground.
+    # Fallback for display modes without GROUND_Z:
+    if GROUND_Z is None:
+        overlay = None
+        for car in cars:
+            for wx, wy, life in car.trail:
+                sx, sy = cam.to_screen(wx, wy)
+                if -6 <= sx <= W + 6 and -6 <= sy <= H + 6:
+                    if overlay is None:
+                        overlay = _get_overlay()
+                    alpha = max(0, min(150, int(150 * life / TRAIL_LIFE)))
+                    pygame.draw.rect(overlay, (60, 35, 30, alpha), (int(sx) - 1, int(sy) - 1, 3, 3))
+        if overlay is not None:
+            screen.blit(overlay, (0, 0))
+
+def _get_particle_sprite(color, size, alpha_step):
+    key = (color[0], color[1], color[2], size, alpha_step)
+    surf = _PARTICLE_CACHE.get(key)
+    if surf is None:
+        scaled = pygame.transform.smoothscale(PARTICLE_RAW, (size, size)).copy()
+        scaled.fill((color[0], color[1], color[2], 255), special_flags=pygame.BLEND_RGB_MULT)
+        if alpha_step < 4:
+            alpha = max(35, int(255 * (alpha_step + 1) / 5.0))
+            a_surf = pygame.Surface((size, size), pygame.SRCALPHA)
+            a_surf.fill((255, 255, 255, alpha))
+            scaled.blit(a_surf, (0, 0), special_flags=pygame.BLEND_RGBA_MULT)
+        surf = scaled
+        _PARTICLE_CACHE[key] = surf
+    return surf
 
 def draw_particles(screen, cam):
     if not PARTICLES:
         return
-    overlay = _get_overlay()
     for x, y, _, _, life, max_life, col in PARTICLES:
         sx, sy = cam.to_screen(x, y)
-        if -4 <= sx <= W + 4 and -4 <= sy <= H + 4:
-            f = life / max_life
-            size = 2 if f < 0.5 else 3
-            overlay.fill((col[0], col[1], col[2], int(230 * f)), (int(sx) - 1, int(sy) - 1, size, size))
-    screen.blit(overlay, (0, 0))
+        if -8 <= sx <= W + 8 and -8 <= sy <= H + 8:
+            f = max(0.0, min(1.0, life / max_life)) if max_life > 0 else 0.0
+            # Scale down to ~1/6th car size (~5px) shrinking to ~2px
+            size = max(2, min(5, int(2 + round(f * 3))))
+            alpha_step = max(0, min(4, int(f * 4.99)))
+            if PARTICLE_RAW is not None:
+                sp = _get_particle_sprite(col, size, alpha_step)
+                screen.blit(sp, (int(round(sx - size * 0.5)), int(round(sy - size * 0.5))))
+            else:
+                s = 2 if f < 0.5 else 3
+                pygame.draw.rect(screen, col, (int(round(sx - s * 0.5)), int(round(sy - s * 0.5)), s, s))
 
 KART_BODY = [(14, -4), (14, 4), (9, 7), (-12, 7), (-14, 5), (-14, -5), (-12, -7), (9, -7)]
 CABIN_BODY = [(6, -4), (7, 0), (6, 4), (-6, 4), (-6, -4)]    # cockpit, sits on the top slice
