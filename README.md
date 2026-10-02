@@ -1,7 +1,7 @@
 # Steer
 
 2D top-down kart racing in pygame. The kart always drives forward: you steer, and you
-fight. Bash rivals off the dirt road into the bushes before they do it to you.
+fight. Bash rivals off the dirt road into the fence before they do it to you.
 
 ## Run
 
@@ -116,22 +116,22 @@ Lobby, ready-up, kick, auto-start, and host migration are all handled server-sid
 - `server.py` — the multiplayer relay/lobby server (deploy to Render; see Multiplayer).
 - `assets/track_tiles/` — the dirt-on-grass road tiles (9-slice + 4 inner corners) plus
   `checktile.png`, the checkered start/finish line.
-- `assets/bush_tiles/` — the square bush (9 pieces) and round bush (4 pieces).
+- `assets/fence_tiles/` — the fence posts (11 pieces, named by which way their rails go:
+  `fence_dr` = rails down and right). The game builds all 16 rail combinations from them.
 - `assets/UI/` — HUD icons (the heart is drawn from `heart.png`).
 - `assets/flags/` — 255 country flags, used for the player's and bots' flags.
 - `assets/font/Jersey25-Regular.ttf` — the pixel font used for all UI text.
-- `assets/*.png` — older single-image decorations; used too if present
-  (`deco_*` are solid, `ground_*` are drive-over).
 
 ## What's built
 
 - **Track**: a procedurally generated stadium loop (random seed per race), 15 tiles wide,
   drawn only from the road tiles. The same 16 px grid decides what's drawn and what counts
   as on/off the road.
-- **Scenery**: square bushes in many sizes (stretched from the 9 pieces) and round bushes,
-  packed as densely as fits (~1,500 per map) with a clear run-off strip beside the road and
-  a bush wall around the map. All bushes are solid. Everything is baked into one image per
-  map, so it costs nothing per frame.
+- **Fences**: the map is only road tiles and fence. A fence runs along each side of the
+  road (one outside the loop, one round the infield), three tiles of grass out from the
+  edge, following the road's shape. Run wide and you hit grass first (and lose a heart),
+  then the fence. Fences are solid, and each straight run is one flat wall to scrape along.
+  The whole map is baked into one image, so it costs nothing per frame.
 - **Physics**: a tyre model (bicycle model with slip angles and a grip curve that falls
   off past its peak), so karts grip, slide, drift and can be caught; the always-on engine
   loosens the rear tyres (power oversteer); a stability assist stops slides snapping into
@@ -155,8 +155,8 @@ Lobby, ready-up, kick, auto-start, and host migration are all handled server-sid
 - **Hearts & game-over**: 3 hearts; lose half each time you leave the road. At 0 you're
   **eliminated** — your kart greys out and coasts to a stop (single-player ends in GAME OVER;
   multiplayer drops you to a spectator view of the leader until the race finishes).
-- **Recovery**: a kart stuck against bushes backs up on its own; if it's still wedged
-  after 3 s it's put back on the road.
+- **Recovery**: a kart stuck against the fence or another kart backs up on its own; if it's
+  still wedged after 3 s it's put back on the road. (Eliminated karts are left where they stop.)
 - **Drifting**: hold drift through a corner to slide the rear and charge a mini-boost that
   fires on release (coloured drift smoke shows the charge building).
 - **Effects**: skid marks from real tyre slip, surface dust off-road, drift smoke, boost
@@ -175,8 +175,7 @@ Lobby, ready-up, kick, auto-start, and host migration are all handled server-sid
 ## Tuning (all constants at the top of `sim.py`)
 
 - Track: `ROAD_WIDTH`, `OFFROAD_RANGE`, `EDGE_GRACE`
-- Scenery: `BUSH_BLOCK_SIZES`, `ROUND_BUSH_WEIGHT`, `OLD_DECOS`, `RUNOFF`, `DECO_GAP`,
-  `ARENA_MARGIN`, `DECO_ATTEMPTS`, `DECO_GROW_TRIES`
+- Fences: `FENCE_OFFSET` (how far out from the road), `FENCE_POST` (collision box), `ARENA_MARGIN`
 - Engine: `MAX_SPEED`, `ENGINE_ACCEL`, `ENGINE_FALLOFF`, `ROLL_RESIST`, `AIR_DRAG`
 - Tyres: `GRIP`, `TIRE_PEAK_SLIP`, `TIRE_SHAPE`, `DRIVE_GRIP_USE`, `STEER_MAX`,
   `STEER_GRIP_RATIO`, `STEER_RATE`, `STABILITY`

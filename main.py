@@ -179,6 +179,23 @@ def main():
     font = sim.get_font(40)
     font_small = sim.get_font(26)
 
+    # gameplay screenshot used as the backdrop for menus / results, dimmed for legibility
+    try:
+        _bg = pygame.image.load(os.path.join(sim.UI_DIR, "menu_bg.png")).convert()
+        menu_bg = pygame.transform.scale(_bg, (sim.W, sim.H))
+        _shade = pygame.Surface((sim.W, sim.H))
+        _shade.set_alpha(140)
+        _shade.fill((10, 18, 12))
+        menu_bg.blit(_shade, (0, 0))
+    except (pygame.error, FileNotFoundError):
+        menu_bg = None
+
+    def draw_bg():
+        if menu_bg is not None:
+            screen.blit(menu_bg, (0, 0))
+        else:
+            screen.fill((30, 60, 30))
+
     profile = load_profile()
     keybinds = dict(DEFAULT_KEYS)
     keybinds.update({k: int(v) for k, v in profile.get("keys", {}).items() if k in DEFAULT_KEYS})
@@ -870,7 +887,7 @@ def main():
                         state = "results"
 
         elif state == "menu":
-            screen.fill((30, 60, 30))
+            draw_bg()
             title = font_big.render("STEER", True, (255, 255, 255))
             screen.blit(title, title.get_rect(center=(sim.W / 2, 55)))
             for i, (_, btn) in enumerate(menu_buttons):
@@ -880,7 +897,7 @@ def main():
                 screen.blit(text, text.get_rect(center=(sim.W / 2, sim.H - 66 + i * 22)))
 
         elif state == "name_entry":
-            screen.fill((30, 60, 30))
+            draw_bg()
             title = font_big.render("STEER", True, (255, 255, 255))
             screen.blit(title, title.get_rect(center=(sim.W / 2, 44)))
             prompt = font_small.render("Enter your name:", True, (220, 230, 210))
@@ -912,7 +929,7 @@ def main():
             screen.blit(hint, hint.get_rect(center=(sim.W / 2, sim.H - 24)))
 
         elif state == "settings":
-            screen.fill((30, 60, 30))
+            draw_bg()
             title = font_big.render("SETTINGS", True, (255, 255, 255))
             screen.blit(title, title.get_rect(center=(sim.W / 2, 40)))
             # volume slider
@@ -942,7 +959,7 @@ def main():
             back_btn.draw(screen, font, back_btn.clicked(mouse_pos))
 
         elif state == "results":
-            screen.fill((30, 60, 30))
+            draw_bg()
             title = font_big.render(end_title, True, (255, 255, 255))
             screen.blit(title, title.get_rect(center=(sim.W / 2, 40)))
             hdr = font_small.render("best lap", True, (170, 185, 165))
@@ -959,7 +976,7 @@ def main():
             back_btn.draw(screen, font, back_btn.clicked(mouse_pos))
 
         elif state == "mode":
-            screen.fill((30, 60, 30))
+            draw_bg()
             title = font_big.render("PLAY", True, (255, 255, 255))
             screen.blit(title, title.get_rect(center=(sim.W / 2, 60)))
             sp_btn.draw(screen, font, sp_btn.clicked(mouse_pos))
@@ -967,7 +984,7 @@ def main():
             back_btn.draw(screen, font, back_btn.clicked(mouse_pos))
 
         elif state == "gamemode":
-            screen.fill((30, 60, 30))
+            draw_bg()
             title = font.render("CHOOSE MODE", True, (255, 255, 255))
             screen.blit(title, title.get_rect(center=(sim.W / 2, 56)))
             for mk, btn in gamemode_buttons:
@@ -975,7 +992,7 @@ def main():
             back_btn.draw(screen, font, back_btn.clicked(mouse_pos))
 
         elif state == "mp_menu":
-            screen.fill((30, 60, 30))
+            draw_bg()
             title = font_big.render("MULTIPLAYER", True, (255, 255, 255))
             screen.blit(title, title.get_rect(center=(sim.W / 2, 60)))
             host_btn.draw(screen, font, host_btn.clicked(mouse_pos))
@@ -986,7 +1003,7 @@ def main():
                 screen.blit(msg, msg.get_rect(center=(sim.W / 2, 262)))
 
         elif state == "host_setup":
-            screen.fill((30, 60, 30))
+            draw_bg()
             title = font_big.render("HOST GAME", True, (255, 255, 255))
             screen.blit(title, title.get_rect(center=(sim.W / 2, 60)))
             lbl = font_small.render(f"Lobby: {player_name.strip() or 'Player'}", True, (220, 230, 210))
@@ -1004,7 +1021,7 @@ def main():
                 screen.blit(msg, msg.get_rect(center=(sim.W / 2, sim.H - 24)))
 
         elif state == "join_entry":
-            screen.fill((30, 60, 30))
+            draw_bg()
             title = font_big.render("JOIN GAME", True, (255, 255, 255))
             screen.blit(title, title.get_rect(center=(sim.W / 2, 60)))
             prompt = font_small.render("Enter 6-character code:", True, (220, 230, 210))
@@ -1022,11 +1039,11 @@ def main():
                 screen.blit(msg, msg.get_rect(center=(sim.W / 2, sim.H - 24)))
 
         elif state == "lobby":
-            screen.fill((30, 60, 30))
+            draw_bg()
             title = font.render("LOBBY", True, (255, 255, 255))
             screen.blit(title, title.get_rect(center=(sim.W / 2, 34)))
             if lobby:
-                is_host = lobby.get("host") == lobby.get("self")
+                i_am_host = lobby.get("host") == lobby.get("self")   # not "is_host": that would overwrite is_host()
                 head = font_small.render(
                     f"{lobby.get('name','')}'s lobby    CODE: {lobby.get('code','')}"
                     f"    ({len(lobby.get('players', []))}/{lobby.get('max','?')})",
@@ -1046,7 +1063,7 @@ def main():
                     rcol = (120, 230, 120) if p["ready"] else (200, 120, 120)
                     rsurf = font_small.render(rtxt, True, rcol)
                     screen.blit(rsurf, rsurf.get_rect(midright=(sim.W / 2 + 140, y + 10)))
-                    if is_host and not is_me:
+                    if i_am_host and not is_me:
                         kr = pygame.Rect(sim.W / 2 + 150, y + 8, 22, 22)
                         pygame.draw.rect(screen, (150, 50, 50), kr, border_radius=4)
                         xk = font_small.render("x", True, (255, 255, 255))

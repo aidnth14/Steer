@@ -6,7 +6,7 @@ from collections import deque
 import pygame
 
 W, H = 600, 400
-WORLD = 4800          # world wraps at this size; the bush wall around the map keeps cars well inside it
+WORLD = 4800          # world wraps at this size; the fences keep cars well inside it
 
 # ---- track ---------------------------------------------------------------------
 ROAD_SEED = 7         # default track seed (main.py picks a random one for each race)
@@ -17,8 +17,8 @@ EDGE_GRACE = 6.0      # px a car's centre may stray past the last road tile befo
                       # step's corner by a pixel or two shouldn't cost a heart
 
 # ---- tiles ---------------------------------------------------------------------
-# The road is built only from the dirt-on-grass tiles in assets/track_tiles/; the scenery
-# only from the bush pieces in assets/bush_tiles/ (plus any old decoration images).
+# The map is built only from the dirt-on-grass road tiles in assets/track_tiles/ and the
+# fence pieces in assets/fence_tiles/ (two fences, one each side of the road, as barriers).
 TILE = 16                       # px size of one tile, and of one cell of the track grid
 GRID_N = WORLD // TILE          # world is a GRID_N x GRID_N grid of cells (keep WORLD a multiple of TILE)
 ASSET_DIR = os.path.join(os.path.dirname(__file__), "assets")
@@ -32,13 +32,16 @@ INNER_TILE_NAMES = [            # [qy][qx]: dirt tile with grass only in that co
     ["dirt_inner_tl", "dirt_inner_tr"],
     ["dirt_inner_bl", "dirt_inner_br"],
 ]
-BUSH_TILE_DIR = os.path.join(ASSET_DIR, "bush_tiles")
-BUSH_TILE_NAMES = [
-    "block_top_left", "block_top", "block_top_right",
-    "block_bottom_left", "block_bottom", "block_bottom_right",
-    "block_shadow_left", "block_shadow", "block_shadow_right",
-    "round_top_left", "round_top_right", "round_bottom_left", "round_bottom_right",
-]
+FENCE_TILE_DIR = os.path.join(ASSET_DIR, "fence_tiles")
+# Each fence piece is a post with rails out to the neighbouring posts. The file name says which
+# way the rails go (u/d/l/r). Whether there's a rail going up only changes the tile's top pixel
+# row, so these 11 cover all 16 combinations: (down, left, right) -> file to start from.
+FENCE_SOURCES = {
+    (1, 0, 1): "fence_dr", (1, 1, 1): "fence_dlr", (1, 1, 0): "fence_dl", (1, 0, 0): "fence_ud",
+    (0, 0, 0): "fence_u", (0, 0, 1): "fence_ur", (0, 1, 1): "fence_ulr", (0, 1, 0): "fence_ul",
+}
+FENCE_UP_ROW_FROM = "fence_ud"  # its top row is the rail going up
+FENCE_COLOR = (117, 83, 56)     # flat fallback if the fence tiles are missing
 
 # ---- UI assets (icons + pixel font) ------------------------------------------------
 UI_DIR = os.path.join(ASSET_DIR, "UI")
@@ -144,25 +147,16 @@ def get_font(size):
 GRASS_COLOR = (62, 137, 72)
 DIRT_COLOR = (184, 111, 80)
 
-# ---- scenery ---------------------------------------------------------------------
-# Square bushes can be any size: (grass columns, grass rows) -> how often that size is picked.
-BUSH_BLOCK_SIZES = [
-    ((2, 2), 8), ((3, 2), 4), ((2, 3), 4), ((4, 2), 3),
-    ((3, 3), 2), ((5, 2), 1), ((2, 4), 1),
-]
-ROUND_BUSH_WEIGHT = 10
-# older single-image decorations in assets/ (loaded if present): name -> solid?
-OLD_DECOS = {
-    "deco_bush_round": True, "deco_bush_small_oval": True, "deco_bush_square_small": True,
-    "ground_dirt_bush": False, "ground_dirt_plain": False, "ground_hedge_pond": False,
-}
-OLD_DECO_WEIGHT = 2
-RUNOFF = 72.0           # px of open grass kept beside the road: nothing solid closer than this
-DECO_GAP = 12.0         # min px between solid objects; under a kart's width (18), so the bush field acts as a barrier
-ARENA_MARGIN = 360.0    # px from the road's bounding box to the bush wall around the map
-DECO_ATTEMPTS = 3000    # random placement tries to scatter the first bushes ...
-DECO_GROW_TRIES = 14    # ... then each bush gets this many tries at a neighbour beside it, until it's packed
-BAKE_PAD = 96           # px of ground baked outside the bush wall
+# ---- fences ---------------------------------------------------------------------
+# A fence runs along each side of the road (outside the loop and around the infield),
+# FENCE_OFFSET cells out from the road, so there's a strip of grass to run wide onto (and
+# lose a heart) before you hit it. 4 = three tiles (48 px) of grass, then the fence.
+FENCE_OFFSET = 4
+# a fence cell's collision box within its 16 px cell: the post (x0, y0, x1, y1), stretched to
+# the cell edge on every side a rail continues, so a run of fence is one flat wall to scrape along
+FENCE_POST = (3, 1, 14, 14)
+ARENA_MARGIN = 360.0    # px of grass baked around the road's bounding box (the camera never sees past it)
+BAKE_PAD = 96           # extra px of grass baked around that
 
 # ---- hearts -----------------------------------------------------------------------
 HEART_COUNT = 3
@@ -231,7 +225,7 @@ GRASS_RESIST = 2.5      # extra resistance on grass (x(1 + this))
 # ---- collisions -------------------------------------------------------------------------
 CAR_RESTITUTION = 0.45  # bounciness of kart-vs-kart hits
 CAR_FRICTION = 0.3
-WALL_RESTITUTION = 0.3  # bushes are a bit softer
+WALL_RESTITUTION = 0.3  # fences give a little: karts bounce off softer than off each other
 WALL_FRICTION = 0.5
 CONTACT_SLOP = 0.3      # px of overlap allowed before pushing apart
 
@@ -320,17 +314,13 @@ def wrap_delta(a, b):
 TILES = None        # 3x3 road tiles, [row][col] as in TRACK_TILE_NAMES
 INNER = None        # 2x2 inner-corner road tiles, [qy][qx]
 CHECK = None        # checkered finish-line tile
-BUSH = {}           # bush pieces by name
-ASSETS = {}         # old single-image decorations by name
-OBJECT_KINDS = []   # everything the scenery can be built from (see _make_kind)
+FENCE = {}          # (up, down, left, right) -> 16 px fence piece, all 16 combinations
 
 def load_assets():
     # needs a display surface to exist (convert); called at startup and after each hot reload
     global TILES, INNER, GRASS_COLOR, DIRT_COLOR
     TILES = INNER = None
-    BUSH.clear()
-    ASSETS.clear()
-    del OBJECT_KINDS[:]
+    FENCE.clear()
 
     grid = [[None] * 3 for _ in range(3)]
     global CHECK
@@ -356,8 +346,12 @@ def load_assets():
             print("inner-corner tiles missing, building them from the edge tiles:", e)
             INNER = [[_make_inner_corner(qx, qy) for qx in (0, 1)] for qy in (0, 1)]
 
-    # bushes removed from the game: leave BUSH empty so no bush scenery or wall is built
-    BUSH.clear()
+    try:
+        _build_fence_tiles({name: _load(FENCE_TILE_DIR, name, alpha=True)
+                            for name in set(FENCE_SOURCES.values()) | {FENCE_UP_ROW_FROM}})
+    except (pygame.error, FileNotFoundError) as e:
+        print("fence tiles missing, drawing fences as flat colour instead:", e)
+        FENCE.clear()
 
     UI.clear()
     for name in UI_ICON_NAMES:
@@ -369,19 +363,16 @@ def load_assets():
     init_audio()
     load_sounds()
 
-    for key in OLD_DECOS:
-        try:
-            ASSETS[key] = _load(ASSET_DIR, key, alpha=True)
-        except (pygame.error, FileNotFoundError):
-            pass    # optional
-
-    if BUSH:
-        for (gw, gh), weight in BUSH_BLOCK_SIZES:
-            OBJECT_KINDS.append(_make_kind(f"bush_{gw}x{gh}", compose_block(gw, gh), "box", weight))
-        OBJECT_KINDS.append(_make_kind("bush_round", compose_round(), "circle", ROUND_BUSH_WEIGHT))
-    for key, img in ASSETS.items():
-        OBJECT_KINDS.append(_make_kind(key, img, "box" if OLD_DECOS[key] else None, OLD_DECO_WEIGHT,
-                                       inset=0.15))
+def _build_fence_tiles(src):
+    # all 16 (up, down, left, right) pieces: take the file with the right down/left/right rails,
+    # then draw or clear the top pixel row, which is the only part a rail going up changes
+    up_row = [src[FENCE_UP_ROW_FROM].get_at((x, 0)) for x in range(TILE)]
+    for (d, l, r), name in FENCE_SOURCES.items():
+        for u in (0, 1):
+            tile = src[name].copy()
+            for x in range(TILE):
+                tile.set_at((x, 0), up_row[x] if u else (0, 0, 0, 0))
+            FENCE[(u, d, l, r)] = tile
 
 def _load(folder, name, alpha):
     img = pygame.image.load(os.path.join(folder, name + ".png"))
@@ -403,62 +394,6 @@ def _make_inner_corner(qx, qy):
             tile.set_at((tx, ty), src.get_at((tx, ty)))
     return tile
 
-def compose_block(gw, gh):
-    # A square bush gw x gh grass tiles big. The 9 pieces form a 2x2 bush; wider bushes repeat
-    # the middle column, taller ones repeat the lower half of the side pieces. The right-hand
-    # side face and the bottom shadow sit in an extra column and row, so the image is
-    # (gw + 1) x (gh + 1) tiles.
-    surf = pygame.Surface(((gw + 1) * TILE, (gh + 1) * TILE), pygame.SRCALPHA)
-    mid_l = _lower_half_twice(BUSH["block_top_left"])
-    mid_r = _lower_half_twice(BUSH["block_top_right"])
-    for r in range(gh + 1):
-        for c in range(gw + 1):
-            last = c == gw
-            if r == 0:
-                piece = BUSH["block_top_left"] if c == 0 else BUSH["block_top_right" if last else "block_top"]
-            elif r < gh - 1:
-                piece = mid_l if c == 0 else (mid_r if last else None)
-            elif r == gh - 1:
-                piece = BUSH["block_bottom_left"] if c == 0 else BUSH["block_bottom_right" if last else "block_bottom"]
-            else:
-                piece = BUSH["block_shadow_left"] if c == 0 else BUSH["block_shadow_right" if last else "block_shadow"]
-            if piece is None:
-                surf.fill(GRASS_COLOR, (c * TILE, r * TILE, TILE, TILE))   # middle of a big bush
-            else:
-                surf.blit(piece, (c * TILE, r * TILE))
-    return surf
-
-def _lower_half_twice(img):
-    out = pygame.Surface((TILE, TILE), pygame.SRCALPHA)
-    half = TILE // 2
-    out.blit(img, (0, 0), (0, half, TILE, half))
-    out.blit(img, (0, half), (0, half, TILE, half))
-    return out
-
-def compose_round():
-    surf = pygame.Surface((2 * TILE, 2 * TILE), pygame.SRCALPHA)
-    for name, x, y in (("round_top_left", 0, 0), ("round_top_right", 1, 0),
-                       ("round_bottom_left", 0, 1), ("round_bottom_right", 1, 1)):
-        surf.blit(BUSH[name], (x * TILE, y * TILE))
-    return surf
-
-def _make_kind(name, surf, shape, weight, inset=0.0):
-    # collision shape = the solid (fully opaque) part of the image; the soft shadow isn't solid
-    w, h = surf.get_size()
-    solid = None
-    if shape:
-        r = surf.get_bounding_rect(min_alpha=255)
-        if r.width == 0:
-            r = surf.get_bounding_rect(min_alpha=128)
-        ix, iy = r.width * inset, r.height * inset
-        x0, y0, x1, y1 = r.x + ix + 1, r.y + iy + 1, r.x + r.width - ix - 1, r.y + r.height - iy - 1
-        if shape == "circle":
-            solid = ("circle", (x0 + x1) / 2, (y0 + y1) / 2, min(x1 - x0, y1 - y0) / 2)
-        else:
-            solid = ("box", x0, y0, x1, y1)
-    return {"name": name, "surf": surf, "w": w, "h": h, "solid": solid, "weight": weight}
-
-
 # =================================================================================================
 # track
 # =================================================================================================
@@ -467,7 +402,7 @@ ROAD_S = [0.0]      # arc length at each point (+ the loop length at the end)
 ROAD_T = []         # unit direction of each segment
 ROAD_LEN = 1.0
 DIRT = bytearray(GRID_N * GRID_N)       # 1 = road cell
-ROAD_NEAR = bytearray(GRID_N * GRID_N)  # cells from the nearest road cell (capped), for scenery spacing
+ROAD_NEAR = bytearray(GRID_N * GRID_N)  # cells from the nearest road cell (capped); fences go where it's FENCE_OFFSET
 
 def generate_road(seed):
     # a "stadium" loop: two straights + two semicircle turns, so it can never cross or pass
@@ -668,10 +603,10 @@ def offroad_factor(x, y):
 
 
 # =================================================================================================
-# scenery: placement, colliders, baked ground image
+# fences: placement, colliders, baked ground image
 # =================================================================================================
-PLACED = []         # (x, y, kind) sprite top-left in world px
-STATICS = []        # solid shapes: ("box", x0, y0, x1, y1) or ("circle", cx, cy, r)
+FENCES = []         # (gx, gy, (up, down, left, right)) one per fence cell
+STATICS = []        # solid boxes: ("box", x0, y0, x1, y1) in world px
 _STATIC_CELL = 64
 _STATIC_HASH = {}   # (cx, cy) -> indices into STATICS
 ARENA = (0, 0, WORLD, WORLD)
@@ -684,138 +619,64 @@ def _road_bbox():
             ys.append(i // GRID_N)
     return min(xs) * TILE, min(ys) * TILE, (max(xs) + 1) * TILE, (max(ys) + 1) * TILE
 
-def _cells_clear(x0, y0, x1, y1, min_cells):
-    # every cell under the rectangle is at least min_cells from the road
-    for gy in range(int(y0 // TILE), int(y1 // TILE) + 1):
-        row = (gy % GRID_N) * GRID_N
-        for gx in range(int(x0 // TILE), int(x1 // TILE) + 1):
-            if ROAD_NEAR[row + gx % GRID_N] < min_cells:
-                return False
-    return True
-
-def _solid_world(kind, x, y):
-    s = kind["solid"]
-    if s[0] == "box":
-        return ("box", x + s[1], y + s[2], x + s[3], y + s[4])
-    return ("circle", x + s[1], y + s[2], s[3])
-
 def _shape_bbox(shape):
-    if shape[0] == "box":
-        return shape[1], shape[2], shape[3], shape[4]
-    _, cx, cy, r = shape
-    return cx - r, cy - r, cx + r, cy + r
+    return shape[1], shape[2], shape[3], shape[4]
 
-def generate_decorations(seed):
-    # Pack the grass with as many bushes as fit: a bush wall all round the map, then
-    # thousands of random tries, keeping each one only if it's clear of the road's run-off
-    # strip and at least DECO_GAP from every other solid thing. Then drive-over decorations.
-    global PLACED, STATICS, ARENA
-    rnd = random.Random(seed ^ 0x5EED)
-    placed, statics = [], []
-    occupied = {}   # coarse hash of solid bounding boxes (grown by half the gap) for overlap tests
-    cell = 64
+def _tidy_fence(cells):
+    # Where the road edge has a one-tile dip, the fence line can double up for a moment: a stub
+    # post sticking off it, or a little 2x2 box. Trim stubs and collapse boxes back to a single
+    # line (never breaking it), until there are none left.
+    def nbrs(c):
+        x, y = c
+        return [p for p in ((x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)) if p in cells]
 
-    def overlaps(x0, y0, x1, y1):
-        for cx in range(int(x0 // cell), int(x1 // cell) + 1):
-            for cy in range(int(y0 // cell), int(y1 // cell) + 1):
-                for (a0, b0, a1, b1) in occupied.get((cx, cy), ()):
-                    if x0 < a1 and a0 < x1 and y0 < b1 and b0 < y1:
-                        return True
-        return False
+    for _ in range(20):
+        changed = False
+        for c in [c for c in cells if len(nbrs(c)) <= 1]:      # stubs (and lone posts)
+            cells.discard(c)
+            changed = True
+        for x, y in sorted(cells):
+            block = [(x, y), (x + 1, y), (x, y + 1), (x + 1, y + 1)]
+            if not all(b in cells for b in block):
+                continue
+            # which corners of the box carry the fence on beyond it
+            ext = [b for b in block if any(p not in block for p in nbrs(b))]
+            inner = [b for b in block if b not in ext]
+            if len(ext) == 2 and abs(ext[0][0] - ext[1][0]) + abs(ext[0][1] - ext[1][1]) == 2:
+                inner = inner[:1]       # line enters and leaves at opposite corners: keep one path
+            if len(ext) >= 2 and inner:
+                for b in inner:
+                    cells.discard(b)
+                changed = True
+        if not changed:
+            return
 
-    def occupy(x0, y0, x1, y1):
-        box = (x0, y0, x1, y1)
-        for cx in range(int(x0 // cell), int(x1 // cell) + 1):
-            for cy in range(int(y0 // cell), int(y1 // cell) + 1):
-                occupied.setdefault((cx, cy), []).append(box)
+def generate_fences():
+    # Two fences, one each side of the road: every cell exactly FENCE_OFFSET steps (counting
+    # diagonals) from the nearest road cell. That traces a closed line outside the loop and
+    # another round the infield, each one cell thick, following the road's shape. Each fence
+    # cell gets rails toward whichever of its 4 neighbours are fence too.
+    global FENCES, STATICS, ARENA
+    n = GRID_N
+    cells = {(i % n, i // n) for i, v in enumerate(ROAD_NEAR) if v == FENCE_OFFSET}
+    _tidy_fence(cells)
+    is_fence = lambda gx, gy: (gx, gy) in cells
+    fences, statics = [], []
+    px0, py0, px1, py1 = FENCE_POST
+    for gx, gy in sorted(cells):
+        u, d = is_fence(gx, gy - 1), is_fence(gx, gy + 1)
+        l, r = is_fence(gx - 1, gy), is_fence(gx + 1, gy)
+        fences.append((gx, gy, (int(u), int(d), int(l), int(r))))
+        x, y = gx * TILE, gy * TILE
+        statics.append(("box", x + (0 if l else px0), y + (0 if u else py0),
+                        x + (TILE if r else px1), y + (TILE if d else py1)))
 
-    rx0, ry0, rx1, ry1 = _road_bbox()
+    rx0, ry0_, rx1, ry1_ = _road_bbox()
     m = ARENA_MARGIN
-    ax0 = int((rx0 - m) // TILE) * TILE
-    ay0 = int((ry0 - m) // TILE) * TILE
-    ax1 = int(math.ceil((rx1 + m) / TILE)) * TILE
-    ay1 = int(math.ceil((ry1 + m) / TILE)) * TILE
-    ARENA = (ax0, ay0, ax1, ay1)
-    half_gap = DECO_GAP / 2
+    ARENA = (int((rx0 - m) // TILE) * TILE, int((ry0_ - m) // TILE) * TILE,
+             int(math.ceil((rx1 + m) / TILE)) * TILE, int(math.ceil((ry1_ + m) / TILE)) * TILE)
 
-    if BUSH:
-        # the wall: one long bush along each side (each piece is (gw + 1) x (gh + 1) tiles)
-        across = (ax1 - ax0) // TILE - 1
-        down = (ay1 - ay0) // TILE - 1
-        walls = [((across, 2), ax0, ay0), ((across, 2), ax0, ay1 - 3 * TILE),
-                 ((2, down - 4), ax0, ay0 + 2 * TILE), ((2, down - 4), ax1 - 3 * TILE, ay0 + 2 * TILE)]
-        for (gw, gh), x, y in walls:
-            kind = _make_kind(f"wall_{gw}x{gh}", compose_block(gw, gh), "box", 0)
-            shape = _solid_world(kind, x, y)
-            placed.append((x, y, kind))
-            statics.append(shape)
-            bx0, by0, bx1, by1 = _shape_bbox(shape)
-            occupy(bx0 - half_gap, by0 - half_gap, bx1 + half_gap, by1 + half_gap)
-
-    solid_kinds = [k for k in OBJECT_KINDS if k["solid"] and k["weight"] > 0]
-    runoff_cells = int(math.ceil(RUNOFF / TILE))
-    grown = []      # placed bushes (not the wall), to grow new ones beside
-
-    def try_place(kind, x, y):
-        x, y = int(x), int(y)
-        if x < ax0 or y < ay0 or x + kind["w"] > ax1 or y + kind["h"] > ay1:
-            return False
-        if kind["solid"]:
-            shape = _solid_world(kind, x, y)
-            bx0, by0, bx1, by1 = _shape_bbox(shape)
-        else:           # drive-over decoration: it just needs its own patch of grass
-            shape = None
-            bx0, by0, bx1, by1 = x, y, x + kind["w"], y + kind["h"]
-        if not _cells_clear(bx0, by0, bx1, by1, runoff_cells):
-            return False
-        if not _cells_clear(x, y, x + kind["w"] - 1, y + kind["h"] - 1, 1):
-            return False    # keep the shadow off the road too
-        if overlaps(bx0 - half_gap, by0 - half_gap, bx1 + half_gap, by1 + half_gap):
-            return False
-        occupy(bx0 - half_gap, by0 - half_gap, bx1 + half_gap, by1 + half_gap)
-        placed.append((x, y, kind))
-        if shape:
-            statics.append(shape)
-            grown.append((x, y, kind, shape))
-        return True
-
-    # scatter: every kind (bushes and any older decorations) by its weight; kept out of the
-    # run-off strip, so nothing that looks like road (a dirt patch) ever sits beside the road
-    all_kinds = [k for k in OBJECT_KINDS if k["weight"] > 0]
-    if all_kinds:
-        all_weights = [k["weight"] for k in all_kinds]
-        for _ in range(DECO_ATTEMPTS):
-            kind = rnd.choices(all_kinds, all_weights)[0]
-            try_place(kind, rnd.randint(ax0, ax1 - kind["w"]), rnd.randint(ay0, ay1 - kind["h"]))
-    if solid_kinds:
-        weights = [k["weight"] for k in solid_kinds]
-        # grow: keep trying to put a new bush just DECO_GAP away from one side of an existing
-        # one; a bush that has no room left beside it stops being tried, so this ends packed
-        active = list(range(len(grown)))
-        while active:
-            k = rnd.randrange(len(active))
-            nx0, ny0, nx1, ny1 = _shape_bbox(grown[active[k]][3])
-            for _ in range(DECO_GROW_TRIES):
-                kind = rnd.choices(solid_kinds, weights)[0]
-                kx0, ky0, kx1, ky1 = _shape_bbox(_solid_world(kind, 0, 0))   # solid part of the image
-                side = rnd.randrange(4)
-                gap = DECO_GAP + 0.5
-                if side == 0:     # right of it
-                    x, y = nx1 + gap - kx0, rnd.uniform(ny0 - (ky1 - ky0), ny1) - ky0
-                elif side == 1:   # left
-                    x, y = nx0 - gap - kx1, rnd.uniform(ny0 - (ky1 - ky0), ny1) - ky0
-                elif side == 2:   # below
-                    x, y = rnd.uniform(nx0 - (kx1 - kx0), nx1) - kx0, ny1 + gap - ky0
-                else:             # above
-                    x, y = rnd.uniform(nx0 - (kx1 - kx0), nx1) - kx0, ny0 - gap - ky1
-                if try_place(kind, math.ceil(x), math.ceil(y)):
-                    active.append(len(grown) - 1)
-                    break
-            else:
-                active[k] = active[-1]
-                active.pop()
-
-    PLACED = placed
+    FENCES = fences
     STATICS = statics
     _STATIC_HASH.clear()
     for idx, shape in enumerate(statics):
@@ -825,7 +686,7 @@ def generate_decorations(seed):
                 _STATIC_HASH.setdefault((cx, cy), []).append(idx)
 
 
-GROUND_SURF = None      # grass + tiled road + all scenery, baked once per map
+GROUND_SURF = None      # grass + tiled road + fences, baked once per map
 GROUND_ORIGIN = (0, 0)  # world coords of GROUND_SURF's top-left pixel
 
 def _bake_finish(surf, ox, oy):
@@ -878,24 +739,27 @@ def build_ground():
 
     _bake_finish(surf, ox, oy)
 
-    # scenery, back to front (lower on the map = drawn later, so it overlaps what's behind)
-    flat = [p for p in PLACED if not p[2]["solid"]]
-    solid = sorted((p for p in PLACED if p[2]["solid"]), key=lambda p: p[1] + p[2]["h"])
-    for x, y, kind in flat + solid:
-        surf.blit(kind["surf"], (x - ox, y - oy))
+    # fences, top row first so each post's cap overlaps the shadow of the post above it
+    for gx, gy, links in sorted(FENCES, key=lambda f: f[1]):
+        px, py = gx * TILE - ox, gy * TILE - oy
+        tile = FENCE.get(links)
+        if tile is None:
+            surf.fill(FENCE_COLOR, (px + 3, py + 1, 11, 13))
+        else:
+            surf.blit(tile, (px, py))
     GROUND_SURF = surf
 
 
 def new_map(seed):
-    # builds the whole track + scenery in one shot (no incremental generation)
+    # builds the whole track + fences in one shot (no incremental generation)
     global ROAD, ROAD_S, ROAD_T, ROAD_LEN, DIRT, ROAD_NEAR, MAP_SEED
     MAP_SEED = seed     # so boxes land identically for every player on this track
     ROAD = generate_road(seed)
     ROAD_S, ROAD_T = _road_tables(ROAD)
     ROAD_LEN = ROAD_S[-1]
     DIRT = build_dirt_grid(ROAD)
-    ROAD_NEAR = _near_road_grid(DIRT, int(math.ceil(RUNOFF / TILE)) + 1)
-    generate_decorations(seed)
+    ROAD_NEAR = _near_road_grid(DIRT, FENCE_OFFSET + 1)
+    generate_fences()
     build_ground()
     spawn_boxes()
     del PARTICLES[:]
@@ -1114,12 +978,18 @@ class Car:
         self.was_on_road = on_road
 
         # wedged against something? back up for a moment; still stuck after that -> rescue
+        # (not for an eliminated kart: it's meant to coast to a stop and stay put, not keep
+        # getting rescued back onto the road)
         speed = math.hypot(self.vx, self.vy)
-        if speed < STUCK_SPEED:
+        if self.dead:
+            self.wedged = self.slow_time = self.reverse_time = 0.0
+        elif speed < STUCK_SPEED:
             self.wedged += dt
         elif speed > 2 * STUCK_SPEED:
             self.wedged = 0.0
-        if self.wedged > RESCUE_TIME:
+        if self.dead:
+            pass
+        elif self.wedged > RESCUE_TIME:
             self.rescue()
         elif self.reverse_time > 0:
             self.reverse_time = max(0.0, self.reverse_time - dt)
@@ -1300,11 +1170,7 @@ def _collide_statics(car):
         for cy in range(int((car.y - r) // _STATIC_CELL), int((car.y + r) // _STATIC_CELL) + 1):
             near.update(_STATIC_HASH.get((cx, cy), ()))
     for idx in near:
-        shape = STATICS[idx]
-        if shape[0] == "box":
-            _collide_box(car, *shape[1:])
-        else:
-            _collide_circle(car, *shape[1:])
+        _collide_box(car, *STATICS[idx][1:])
 
 def _collide_box(car, x0, y0, x1, y1):
     hx, hy = (x1 - x0) / 2, (y1 - y0) / 2
@@ -1325,31 +1191,11 @@ def _collide_box(car, x0, y0, x1, y1):
         if best is None or ov < best:
             best, bk = ov, k
             nx, ny = (ux, uy) if d >= 0 else (-ux, -uy)
-    if bk < 2:      # a face of the bush: the kart's corner that's deepest in it
+    if bk < 2:      # a face of the fence: the kart's corner that's deepest in it
         px, py = _deepest(_corners_local(c, s, CAR_HL, CAR_HW), -nx, -ny)
-    else:           # a face of the kart: the bush's corner that's deepest in it
+    else:           # a face of the kart: the fence's corner that's deepest in it
         px, py = _deepest([(-dx + sx * hx, -dy + sy * hy) for sx in (-1, 1) for sy in (-1, 1)], nx, ny)
     _resolve_static(car, nx, ny, best, px, py)
-
-def _collide_circle(car, cx, cy, r):
-    dx, dy = wrap_delta(car.x, cx), wrap_delta(car.y, cy)     # car -> circle centre
-    if dx * dx + dy * dy > (r + CAR_BOUND) ** 2:
-        return
-    rad = math.radians(car.angle)
-    c, s = math.cos(rad), math.sin(rad)
-    lx, ly = dx * c + dy * s, -dx * s + dy * c                # circle centre in the kart's frame
-    qx, qy = max(-CAR_HL, min(CAR_HL, lx)), max(-CAR_HW, min(CAR_HW, ly))
-    ex, ey = qx - lx, qy - ly
-    d = math.hypot(ex, ey)
-    if d >= r:
-        return
-    if d > 1e-6:
-        nlx, nly, depth = ex / d, ey / d, r - d
-    elif CAR_HL - abs(lx) < CAR_HW - abs(ly):   # centre inside the kart: out the shallow way
-        nlx, nly, depth = (-1.0 if lx > 0 else 1.0), 0.0, r + CAR_HL - abs(lx)
-    else:
-        nlx, nly, depth = 0.0, (-1.0 if ly > 0 else 1.0), r + CAR_HW - abs(ly)
-    _resolve_static(car, nlx * c - nly * s, nlx * s + nly * c, depth, qx * c - qy * s, qx * s + qy * c)
 
 def _resolve_static(car, nx, ny, depth, px, py):
     # n points out of the obstacle into the kart; (px, py) = contact point relative to the kart
