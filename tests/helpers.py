@@ -17,4 +17,7 @@ def ensure_display():
     if not pygame.display.get_init() or pygame.display.get_surface() is None:
         pygame.init()
         pygame.display.set_mode((sim.W, sim.H))
+        # fonts cached before a pygame.quit() point at freed SDL_ttf state and segfault if
+        # reused; drop the cache so get_font() rebuilds them against the fresh display
+        sim._FONT_CACHE.clear()
         sim.load_assets()
