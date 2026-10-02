@@ -164,10 +164,9 @@ async def handler(ws):
                     except Exception:
                         pass
 
-            elif t == "state":
-                # relay this player's car snapshot to the rest of the room
-                await broadcast(room, {"t": "state", "id": me.id, "car": msg.get("car")},
-                                exclude=ws)
+            elif t in ("state", "box", "bots", "finished"):
+                # in-race traffic: relay to the rest of the room, tagged with the sender id
+                await broadcast(room, {**msg, "id": me.id}, exclude=ws)
     finally:
         if room is not None and me is not None:
             room.players.pop(me.id, None)

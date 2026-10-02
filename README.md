@@ -74,8 +74,18 @@ STEER_SERVER_URL=wss://steer-server.onrender.com python main.py
 
 Each client simulates **only its own car** with full physics and broadcasts its state
 ~20×/s; the server relays those snapshots to the rest of the room, and remote cars are
-smoothly interpolated toward them. No central physics, so the server stays cheap. Lobby,
-ready-up, kick, auto-start, and host migration are all handled server-side.
+smoothly interpolated toward them. No central physics, so the server stays cheap.
+
+- **Bots in multiplayer**: the host fills the grid up to ~6 racers with bots, simulates
+  their AI, and broadcasts them like extra cars (clients puppet them).
+- **Boxes are host-authoritative**: box layout is deterministic from the track seed, and the
+  host resolves pickups and tells everyone who got what, so there's no desync over power-ups.
+- **Shared finish**: the host decides when the race is over (someone completed the laps, or
+  only one racer is left) and everyone sees the same results screen.
+- **Leaving mid-race**: a player who drops is removed (their kart is retired); if the host
+  leaves, a remaining client is promoted and takes over the bots + box authority.
+
+Lobby, ready-up, kick, auto-start, and host migration are all handled server-side.
 
 ## Files
 
@@ -120,9 +130,13 @@ ready-up, kick, auto-start, and host migration are all handled server-side.
   roof outline; each car floats its name + flag above it.
 - **Mystery boxes**: floating `?` boxes around the loop in three colours — yellow (speed
   boost), blue (+1 heart), red (instant bash recharge). Taken boxes respawn after 6 s.
-- **Laps & leaderboard**: 3 laps per race. A live leaderboard under the bash meter shows the
-  running order with each racer's flag and lap; finishing all laps shows a results screen.
-- **Hearts**: 3; lose half a heart each time you leave the road.
+- **Laps & leaderboard**: 3 laps per race, a **3-2-1-GO** countdown at the start, and a live
+  leaderboard (flag + lap, eliminated karts drop to the bottom marked OUT). Current lap time
+  and best lap show top-centre; the results screen lists finishing order + each racer's best
+  lap.
+- **Hearts & game-over**: 3 hearts; lose half each time you leave the road. At 0 you're
+  **eliminated** — your kart greys out and coasts to a stop (single-player ends in GAME OVER;
+  multiplayer drops you to a spectator view of the leader until the race finishes).
 - **Recovery**: a kart stuck against bushes backs up on its own; if it's still wedged
   after 3 s it's put back on the road.
 - **Effects**: skid marks from real tyre slip, grass/dirt dust, impact sparks, screen shake.

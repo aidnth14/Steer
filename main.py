@@ -1,3 +1,4 @@
+import math
 import os
 import random
 import sys
@@ -155,6 +156,11 @@ def main():
     slot_by_id = {}             # player id -> grid slot (during a race)
     snap_by_slot = {}           # grid slot -> latest car snapshot dict
     bcast_t = 0.0
+    mp_players = []             # [{id,name,flag,slot}] for the current race
+    mp_bots = []                # [{slot,name,flag,ci}] bots the host added
+    countdown = 0.0             # 3..0 pre-race lock
+    go_timer = 0.0              # brief "GO!" flash
+    end_title = "FINISH"        # results-screen title ("FINISH" / "GAME OVER")
 
     back_btn = Button((sim.W / 2 - 100, 306, 200, 44), "Back")
     start_btn = Button((sim.W / 2 - 100, 256, 200, 42), "Start Race")
@@ -176,7 +182,9 @@ def main():
     last_mtime = os.path.getmtime(SIM_PATH)
 
     def start_game():
-        nonlocal cars, player, cam, current_seed, state
+        nonlocal cars, player, cam, current_seed, state, countdown, go_timer, online
+        sim.NET_ROLE = "off"
+        online = False
         bot_count = random.randint(5, 7)        # 5-7 bots per race
         current_seed = random.randint(0, 1_000_000)
         print(f"track seed: {current_seed}  bots: {bot_count}")
@@ -189,6 +197,7 @@ def main():
         for i, bot in enumerate(c for c in cars if c is not player):
             sim.make_bot(bot, i, BOT_COLORS[i % len(BOT_COLORS)])
         cam = sim.Camera(player)
+        countdown, go_timer = 3.0, 0.0
         state = "playing"
 
     def reload_and_migrate():
@@ -209,30 +218,63 @@ def main():
             netc.close()
         netc, lobby, online, my_ready = None, None, False, False
 
-    def start_mp_race(start_msg):
-        # build the grid from the server's player list; I drive my slot, the rest are remote
-        nonlocal cars, player, cam, current_seed, state, online, slot_by_id, snap_by_slot, bcast_t
-        players = start_msg["players"]
-        current_seed = start_msg["seed"]
-        sim.new_map(current_seed)
-        cars = sim.spawn_grid(len(players))
-        slot_by_id = {p["id"]: p["slot"] for p in players}
+    def is_host():
+        return bool(lobby) and lobby.get("host") == lobby.get("self")
+
+    def make_bots(nplayers):
+        target = 6      # aim for a reasonably full grid
+        nb = max(0, min(12 - nplayers, target - nplayers))
+        return [{"slot": nplayers + k,
+                 "name": sim.BOT_NAMES[k % len(sim.BOT_NAMES)],
+                 "flag": random.choice(sim.FLAG_CODES) if sim.FLAG_CODES else None,
+                 "ci": k} for k in range(nb)]
+
+    def rebuild_grid():
+        # (re)build the car list from mp_players + mp_bots; I drive my slot, everyone else is
+        # remote — except the host, which also simulates the bots
+        nonlocal cars, player, cam, slot_by_id, snap_by_slot
+        total = len(mp_players) + len(mp_bots)
+        cars = sim.spawn_grid(total)
+        slot_by_id = {p["id"]: p["slot"] for p in mp_players}
         snap_by_slot = {}
         my_id = lobby["self"]
+        host = is_host()
         player = None
-        for p in players:
+        for p in mp_players:
             c = cars[p["slot"]]
-            c.name = p["name"]
-            c.flag = p["flag"]
+            c.name, c.flag = p["name"], p["flag"]
             c.color = PLAYER_PALETTE[p["slot"] % len(PLAYER_PALETTE)]
             if p["id"] == my_id:
                 player = c
             else:
                 c.is_remote = True
+        for bd in mp_bots:
+            c = cars[bd["slot"]]
+            sim.make_bot(c, bd["ci"], PLAYER_PALETTE[bd["slot"] % len(PLAYER_PALETTE)])
+            c.name, c.flag = bd["name"], bd["flag"]
+            c.is_remote = not host      # host runs bot AI; clients puppet them
         cam = sim.Camera(player)
-        online = True
-        bcast_t = 0.0
+
+    def start_mp_race(start_msg):
+        nonlocal current_seed, state, online, bcast_t, countdown, go_timer, end_title, mp_players, mp_bots
+        mp_players = start_msg["players"]
+        current_seed = start_msg["seed"]
+        sim.new_map(current_seed)
+        sim.NET_ROLE = "host" if is_host() else "client"
+        mp_bots = make_bots(len(mp_players)) if is_host() else []
+        rebuild_grid()
+        if is_host() and mp_bots:
+            netc.send({"t": "bots", "list": mp_bots})
+        online, bcast_t, end_title = True, 0.0, "FINISH"
+        countdown, go_timer = 3.0, 0.0
         state = "playing"
+
+    def apply_finished(order):
+        nonlocal final_order, state, end_title
+        final_order = [cars[i] for i in order if 0 <= i < len(cars)]
+        end_title = "FINISH"
+        net_disconnect()
+        state = "results"
 
     def confirm_name():
         nonlocal state
@@ -298,16 +340,35 @@ def main():
                         lobby["self"] = prev_self   # server only sends self on the first ack
                     if not m.get("started") and state in ("host_setup", "join_entry", "lobby"):
                         state = "lobby"
+                    elif online and is_host() and sim.NET_ROLE == "client":
+                        # the host left mid-race and I was promoted: take over bots + boxes
+                        sim.NET_ROLE = "host"
+                        for bd in mp_bots:
+                            if bd["slot"] < len(cars):
+                                cars[bd["slot"]].is_remote = False
                 elif mt == "kicked":
                     net_msg = "You were kicked from the lobby"
                     net_disconnect()
                     state = "mp_menu"
                 elif mt == "left":
-                    pass        # a follow-up room message carries the new list
+                    if online:          # drop the departed player's car from the race
+                        slot = slot_by_id.get(m.get("id"))
+                        if slot is not None and slot < len(cars):
+                            cars[slot].dead = True
                 elif mt == "start":
                     start_mp_race(m)
+                elif mt == "bots" and online:
+                    mp_bots = m.get("list", [])
+                    rebuild_grid()
+                elif mt == "box" and online:
+                    idx, slot, kind = m.get("i"), m.get("slot"), m.get("kind")
+                    sim.apply_box_event(idx, kind)
+                    if player is not None and slot == slot_by_id.get(lobby.get("self")):
+                        sim.give_powerup(player, kind)   # my pickup: apply to my own car
+                elif mt == "finished" and online:
+                    apply_finished(m.get("order", []))
                 elif mt == "state" and online:
-                    slot = slot_by_id.get(m.get("id"))
+                    slot = m.get("slot", slot_by_id.get(m.get("id")))
                     if slot is not None:
                         snap_by_slot[slot] = m.get("car")
 
@@ -534,46 +595,103 @@ def main():
                         state = "menu"
 
         if state == "playing":
-            if not online:          # hot reload only makes sense for the local single-player sim
-                mtime = os.path.getmtime(SIM_PATH)
-                if mtime != last_mtime:
-                    last_mtime = mtime
-                    reload_and_migrate()
-
-            keys = pygame.key.get_pressed()
-            steer = 0.0
-            if keys[pygame.K_LEFT] or keys[pygame.K_a]:
-                steer -= 1
-            if keys[pygame.K_RIGHT] or keys[pygame.K_d]:
-                steer += 1
-            steer = max(-1.0, min(1.0, steer + pad_steer()))
-
-            if online:
-                # I drive my car; every other car is a remote puppet corrected from the net
-                controls = [(steer, action) if c is player else (0, None) for c in cars]
-                sim.step(dt, cars, controls)
-                lerp = min(1.0, 10.0 * dt)
-                for slot, c in enumerate(cars):
-                    if c.is_remote and slot in snap_by_slot:
-                        sim.apply_net_state(c, snap_by_slot[slot], lerp)
-                bcast_t += dt
-                if bcast_t >= 1.0 / BCAST_HZ and netc is not None:
-                    netc.send({"t": "state", "car": sim.car_net_state(player)})
-                    bcast_t = 0.0
+            if countdown > 0:
+                # pre-race lock: 3..2..1..GO, cars frozen (no step)
+                countdown -= dt
+                if countdown <= 0:
+                    go_timer = 0.8
+                cam.update(dt, player)
+                sim.draw_world(screen, cam, cars)
+                sim.draw_hud(screen, player, font_small, cars)
+                n = int(math.ceil(countdown))
+                big = font_big.render(str(n), True, (255, 255, 255))
+                screen.blit(big, big.get_rect(center=(sim.W / 2, sim.H / 2 - 20)))
             else:
-                controls = [(steer, action) if c is player else sim.bot_control(c, cars, dt)
-                            for c in cars]
-                sim.step(dt, cars, controls)
-            cam.update(dt, player)
+                if not online:      # hot reload only makes sense for the local single-player sim
+                    mtime = os.path.getmtime(SIM_PATH)
+                    if mtime != last_mtime:
+                        last_mtime = mtime
+                        reload_and_migrate()
 
-            sim.draw_world(screen, cam, cars)
-            sim.draw_hud(screen, player, font_small, cars)
+                keys = pygame.key.get_pressed()
+                steer = 0.0
+                if keys[pygame.K_LEFT] or keys[pygame.K_a]:
+                    steer -= 1
+                if keys[pygame.K_RIGHT] or keys[pygame.K_d]:
+                    steer += 1
+                steer = max(-1.0, min(1.0, steer + pad_steer()))
 
-            if sim.lap_of(player) >= sim.TOTAL_LAPS:
-                final_order = sorted(cars, key=lambda c: c.progress, reverse=True)
+                spectating = online and player.dead
+                if spectating:
+                    steer, action = 0.0, None
+
                 if online:
-                    net_disconnect()
-                state = "results"
+                    # I drive my car; bots are mine too if I'm host; every other car is a
+                    # remote puppet corrected from the net
+                    controls = []
+                    for c in cars:
+                        if c is player:
+                            controls.append((steer, action))
+                        elif not c.is_remote:           # host-owned bot
+                            controls.append(sim.bot_control(c, cars, dt))
+                        else:
+                            controls.append((0, None))
+                    sim.step(dt, cars, controls)
+                    lerp = min(1.0, 10.0 * dt)
+                    for slot, c in enumerate(cars):
+                        if c.is_remote and slot in snap_by_slot:
+                            sim.apply_net_state(c, snap_by_slot[slot], lerp)
+                    # the host owns box pickups: broadcast each one it resolved this frame
+                    if sim.NET_ROLE == "host" and sim.BOX_EVENTS and netc is not None:
+                        for idx, slot, kind in sim.BOX_EVENTS:
+                            netc.send({"t": "box", "i": idx, "slot": slot, "kind": kind})
+                    sim.BOX_EVENTS.clear()
+                    # broadcast my car (+ any bots I own) ~BCAST_HZ
+                    bcast_t += dt
+                    if bcast_t >= 1.0 / BCAST_HZ and netc is not None:
+                        for slot, c in enumerate(cars):
+                            if not c.is_remote:
+                                netc.send({"t": "state", "slot": slot, "car": sim.car_net_state(c)})
+                        bcast_t = 0.0
+                    # host decides when the race is over -> tell everyone
+                    if sim.NET_ROLE == "host":
+                        alive = [c for c in cars if not c.dead]
+                        done = any(sim.lap_of(c) >= sim.TOTAL_LAPS for c in cars)
+                        if (done or len(alive) <= 1) and netc is not None:
+                            order = sorted(range(len(cars)),
+                                           key=lambda i: (cars[i].dead, -cars[i].progress))
+                            netc.send({"t": "finished", "order": order})
+                            apply_finished(order)
+                else:
+                    controls = [(steer, action) if c is player else sim.bot_control(c, cars, dt)
+                                for c in cars]
+                    sim.step(dt, cars, controls)
+
+                # camera follows the leader while spectating, else your own car
+                cam_target = player
+                if spectating:
+                    live = [c for c in cars if not c.dead]
+                    cam_target = max(live, key=lambda c: c.progress) if live else player
+                cam.update(dt, cam_target)
+
+                sim.draw_world(screen, cam, cars)
+                sim.draw_hud(screen, player, font_small, cars)
+                go_timer = max(0.0, go_timer - dt)
+                if go_timer > 0:
+                    go = font_big.render("GO!", True, (120, 255, 120))
+                    screen.blit(go, go.get_rect(center=(sim.W / 2, sim.H / 2 - 20)))
+                if spectating:
+                    ov = font.render("YOU'RE OUT - spectating", True, (255, 120, 120))
+                    screen.blit(ov, ov.get_rect(center=(sim.W / 2, 40)))
+
+                if not online and sim.lap_of(player) >= sim.TOTAL_LAPS:
+                    final_order = sorted(cars, key=lambda c: (c.dead, -c.progress))
+                    end_title = "FINISH"
+                    state = "results"
+                elif not online and player.dead:
+                    final_order = sorted(cars, key=lambda c: (c.dead, -c.progress))
+                    end_title = "GAME OVER"
+                    state = "results"
 
         elif state == "menu":
             screen.fill((30, 60, 30))
@@ -627,14 +745,19 @@ def main():
 
         elif state == "results":
             screen.fill((30, 60, 30))
-            title = font_big.render("FINISH", True, (255, 255, 255))
-            screen.blit(title, title.get_rect(center=(sim.W / 2, 44)))
+            title = font_big.render(end_title, True, (255, 255, 255))
+            screen.blit(title, title.get_rect(center=(sim.W / 2, 40)))
+            hdr = font_small.render("best lap", True, (170, 185, 165))
+            screen.blit(hdr, hdr.get_rect(midright=(sim.W / 2 + 170, 78)))
             for i, c in enumerate(final_order):
-                me = c is player or (player is None and c.name == player_name)
-                tag = f"{i + 1}.  {c.name}" + ("  (you)" if me else "")
+                me = c is player
+                tag = f"{i + 1}.  {c.name}" + ("  (you)" if me else "") + ("  OUT" if c.dead else "")
                 color = (255, 235, 120) if me else (235, 235, 235)
+                y = 90 + i * 18
                 row = font_small.render(tag, True, color)
-                screen.blit(row, row.get_rect(midleft=(sim.W / 2 - 120, 96 + i * 24)))
+                screen.blit(row, row.get_rect(midleft=(sim.W / 2 - 170, y)))
+                bl = font_small.render(sim.fmt_time(c.best_lap), True, (190, 205, 185))
+                screen.blit(bl, bl.get_rect(midright=(sim.W / 2 + 170, y)))
             back_btn.draw(screen, font, back_btn.clicked(mouse_pos))
 
         elif state == "mode":

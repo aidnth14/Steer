@@ -871,7 +871,8 @@ def build_ground():
 
 def new_map(seed):
     # builds the whole track + scenery in one shot (no incremental generation)
-    global ROAD, ROAD_S, ROAD_T, ROAD_LEN, DIRT, ROAD_NEAR
+    global ROAD, ROAD_S, ROAD_T, ROAD_LEN, DIRT, ROAD_NEAR, MAP_SEED
+    MAP_SEED = seed     # so boxes land identically for every player on this track
     ROAD = generate_road(seed)
     ROAD_S, ROAD_T = _road_tables(ROAD)
     ROAD_LEN = ROAD_S[-1]
@@ -918,8 +919,15 @@ class Car:
         self.track_idx = None
         self.trail = []             # skid marks: [x, y, life]
         self.hearts = HEART_COUNT
+        self.dead = False           # out of the race (hearts hit 0)
         self.was_on_road = True
         self.heart_cooldown = 0.0
+        # lap timing
+        self.race_t = 0.0           # seconds since GO
+        self.cur_lap = 0            # laps completed so far (for detecting a new lap)
+        self.last_lap_t = 0.0       # race_t at the last lap crossing
+        self.last_lap = 0.0         # most recent completed lap time (s)
+        self.best_lap = 0.0         # best lap time this race (0 = none yet)
         self.off_f = self.off_r = 0.0   # how far onto the grass each axle is (0..1)
         self.slip_f = self.slip_r = 0.0 # tyre sideways slip, px/s (skid marks)
         self.boost_time = 0.0       # > 0 while a mystery-box speed boost is active
@@ -1012,6 +1020,8 @@ class Car:
             boost = (1 + BOOST_PACE) if self.boost_time > 0 else 1.0
             drive = (ENGINE_ACCEL * m * self.pace * boost * (1 - frac * ENGINE_FALLOFF)
                      * (1 - self.off_r * GRASS_ENGINE_LOSS))
+        if self.dead:
+            drive = 0.0             # eliminated: coast to a stop
 
         # front tyres: slip angle between where the wheels point and where they're moving
         lat_f = v_lat + self.omega * AXLE_FRONT
@@ -1058,6 +1068,7 @@ class Car:
         self.slip_f, self.slip_r = abs(u_f), abs(u_r)
 
     def post_frame(self, dt):
+        self.race_t += dt
         self.bash_cd = max(0.0, self.bash_cd - dt)
         self.bash_time = max(0.0, self.bash_time - dt)
         self.boost_time = max(0.0, self.boost_time - dt)
@@ -1073,7 +1084,11 @@ class Car:
         if self.was_on_road and not on_road and self.heart_cooldown <= 0.0:
             self.hearts = max(0.0, self.hearts - HEART_PENALTY)
             self.heart_cooldown = HEART_COOLDOWN
-            play("death" if self.hearts <= 0.0 else "crash")
+            play("crash")
+        if self.hearts <= 0.0 and not self.dead:
+            self.dead = True
+            play("death")
+            spawn_particles(self.x, self.y, 20, 150, (90, 90, 95), 0.8)
         self.was_on_road = on_road
 
         # wedged against something? back up for a moment; still stuck after that -> rescue
@@ -1364,6 +1379,12 @@ def step(dt, cars, controls):
         if car.track_s is not None:
             car.progress += (s - car.track_s + ROAD_LEN / 2) % ROAD_LEN - ROAD_LEN / 2
         car.track_s = s
+        lap = lap_of(car)
+        if lap > car.cur_lap and not car.dead:      # crossed the line into a new lap
+            car.last_lap = car.race_t - car.last_lap_t
+            car.best_lap = car.last_lap if car.best_lap <= 0 else min(car.best_lap, car.last_lap)
+            car.last_lap_t = car.race_t
+            car.cur_lap = lap
     hit = max((c.impact for c in cars), default=0.0)   # one impact sound per frame, hardest hit
     if hit > 180:
         play("crash")
@@ -1524,18 +1545,21 @@ def _update_particles(dt):
 
 # ---- mystery boxes -----------------------------------------------------------------
 BOXES = []          # [dict(x, y, phase, timer)]  timer > 0 -> taken, counting down to respawn
+NET_ROLE = "off"    # off (single-player) | host | client -- who decides box pickups
+BOX_EVENTS = []     # host collects (box_index, slot, kind) here each frame to broadcast
 
 def spawn_boxes():
     del BOXES[:]
     if ROAD_LEN <= 1.0:
         return
+    rng = random.Random(MAP_SEED)       # deterministic: every player gets the same boxes
     for i in range(BOX_COUNT):
         s = (i + 0.5) / BOX_COUNT * ROAD_LEN                     # evenly spaced around the loop
-        lateral = random.uniform(-1, 1) * ROAD_WIDTH * 0.5 * BOX_LATERAL
+        lateral = rng.uniform(-1, 1) * ROAD_WIDTH * 0.5 * BOX_LATERAL
         x, y, _ = road_pose(s, lateral)
         kind = BOX_TYPES[i % len(BOX_TYPES)]                     # cycle yellow / blue / red
         BOXES.append({"x": x % WORLD, "y": y % WORLD, "kind": kind,
-                      "phase": random.uniform(0, 2 * math.pi), "timer": 0.0})
+                      "phase": rng.uniform(0, 2 * math.pi), "timer": 0.0})
 
 def give_powerup(car, kind):
     if kind == "boost":
@@ -1553,19 +1577,33 @@ def give_powerup(car, kind):
 
 def _update_boxes(dt, cars):
     reach_sq = (BOX_PICKUP + CAR_HW) ** 2
-    for b in BOXES:
+    for idx, b in enumerate(BOXES):
         b["phase"] += BOX_FLOAT_SPEED * dt
         if b["timer"] > 0:
             b["timer"] -= dt
             continue
-        for car in cars:
+        if NET_ROLE == "client":
+            continue            # the host owns pickups; clients just animate the boxes
+        for slot, car in enumerate(cars):
+            if car.dead:
+                continue
             dx = wrap_delta(b["x"], car.x)
             dy = wrap_delta(b["y"], car.y)
             if dx * dx + dy * dy <= reach_sq:
                 give_powerup(car, b["kind"])
                 b["timer"] = BOX_RESPAWN
                 spawn_particles(b["x"], b["y"], 14, 130, BOX_COLORS[b["kind"]], 0.6)
+                if NET_ROLE == "host":
+                    BOX_EVENTS.append((idx, slot, b["kind"]))
                 break
+
+def apply_box_event(idx, kind):
+    # a client marks a box as taken + plays the effect; the recipient's own powerup is
+    # applied separately (only the local player applies it to its own car)
+    if 0 <= idx < len(BOXES):
+        b = BOXES[idx]
+        b["timer"] = BOX_RESPAWN
+        spawn_particles(b["x"], b["y"], 14, 130, BOX_COLORS.get(kind, (255, 215, 70)), 0.6)
 
 def lap_of(car):
     # laps completed since the start line; progress is px driven along the loop
@@ -1575,7 +1613,8 @@ def lap_of(car):
 
 # ---- multiplayer car sync ----------------------------------------------------------
 _NET_SNAP = ("vx", "vy", "omega", "steer_angle", "flash", "bash_time",
-             "boost_time", "hearts", "progress", "slip_f", "slip_r")
+             "boost_time", "hearts", "progress", "slip_f", "slip_r",
+             "dead", "last_lap", "best_lap")
 
 def car_net_state(car):
     d = {"x": car.x, "y": car.y, "angle": car.angle}
@@ -1681,12 +1720,13 @@ def draw_car(screen, car, cam):
 
     body = [pt(lx, ly) for lx, ly in KART_BODY]
     lit = car.flash > 0 or car.bash_time > 0
+    base_col = (90, 90, 95) if car.dead else car.color      # eliminated karts go grey
     # sprite stacking: the same body slice drawn bottom-to-top, each a pixel higher and
     # a little brighter, so the kart reads as a solid block with height
     for k in range(STACK_LAYERS):
         off = -k * STACK_LIFT
         f = 0.55 + 0.45 * (k / (STACK_LAYERS - 1))
-        pygame.draw.polygon(screen, _shade(car.color, f), [(x, y + off) for x, y in body])
+        pygame.draw.polygon(screen, _shade(base_col, f), [(x, y + off) for x, y in body])
     top_off = -(STACK_LAYERS - 1) * STACK_LIFT
     top = [(x, y + top_off) for x, y in body]
     pygame.draw.polygon(screen, (255, 255, 255), top, 3 if lit else 2)   # white stroke on the roof
@@ -1805,9 +1845,16 @@ def draw_hearts(screen, hearts):
         if frac > 0:    # left slice of the full heart = how much of this one is left
             screen.blit(full, (x, y), pygame.Rect(0, 0, max(1, int(size * frac)), size))
 
+def fmt_time(t):
+    if t <= 0:
+        return "--.---"
+    m = int(t // 60)
+    s = t - 60 * m
+    return f"{m}:{s:06.3f}" if m else f"{s:.3f}"
+
 def draw_leaderboard(screen, cars, player):
-    # live running order (furthest along the loop = 1st), drawn under the bash meter
-    order = sorted(cars, key=lambda c: c.progress, reverse=True)
+    # live running order (furthest along the loop = 1st); eliminated karts drop to the bottom
+    order = sorted(cars, key=lambda c: (c.dead, -c.progress))
     font = get_font(22)
     x, y0 = 14, 64
     row_h = 19
@@ -1825,7 +1872,6 @@ def draw_leaderboard(screen, cars, player):
         color = (255, 235, 120) if c is player else (235, 235, 235)
         pygame.draw.circle(screen, c.color, (x + 6, yc + 8), 4)
         pygame.draw.circle(screen, (255, 255, 255), (x + 6, yc + 8), 4, 1)
-        lap = min(lap_of(c) + 1, TOTAL_LAPS)
         num = font.render(f"{i + 1}.", True, color)
         screen.blit(num, (x + 14, yc))
         tx = x + 36
@@ -1833,10 +1879,13 @@ def draw_leaderboard(screen, cars, player):
         if flag:
             screen.blit(flag, (tx, yc + 4))
             tx += flag.get_width() + 3
-        text = font.render(name, True, color)
+        text = font.render(name, True, (150, 90, 90) if c.dead else color)
         screen.blit(text, (tx, yc))
-        lap_txt = font.render(f"L{lap}", True, (170, 185, 165))
-        screen.blit(lap_txt, lap_txt.get_rect(topright=(x + w - 8, yc)))
+        if c.dead:
+            tag = font.render("OUT", True, (210, 90, 90))
+        else:
+            tag = font.render(f"L{min(lap_of(c) + 1, TOTAL_LAPS)}", True, (170, 185, 165))
+        screen.blit(tag, tag.get_rect(topright=(x + w - 8, yc)))
 
 def draw_hud(screen, car, font=None, cars=None):
     draw_hearts(screen, car.hearts)
@@ -1848,5 +1897,12 @@ def draw_hud(screen, car, font=None, cars=None):
     label_font = font or get_font(20)
     label = label_font.render("BASH" if ready >= 1 else "...", True, (255, 255, 255))
     screen.blit(label, (x + w + 6, y - 5))
+    # lap time (current) + best, top-centre
+    tf = get_font(22)
+    cur = max(0.0, car.race_t - car.last_lap_t)
+    lap_s = tf.render(f"LAP  {fmt_time(cur)}", True, (255, 255, 255))
+    best_s = tf.render(f"BEST {fmt_time(car.best_lap)}", True, (255, 235, 120))
+    screen.blit(lap_s, lap_s.get_rect(midtop=(W / 2, 6)))
+    screen.blit(best_s, best_s.get_rect(midtop=(W / 2, 24)))
     if cars is not None:
         draw_leaderboard(screen, cars, car)
