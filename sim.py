@@ -1816,36 +1816,30 @@ def draw_leaderboard(screen, cars, player):
     # live running order (furthest along the loop = 1st); eliminated karts drop to the bottom
     order = sorted(cars, key=lambda c: (c.dead, -c.progress))
     font = get_font(22)
-    x, y0 = 14, 64
     row_h = 19
-    pad = 6
     w = 176
-    h = pad * 2 + row_h * len(order) + 20
-    panel = pygame.Surface((w, h), pygame.SRCALPHA)
-    panel.fill((15, 18, 15, 160))
-    screen.blit(panel, (x - 4, y0 - 4))
-    head = font.render("LEADERBOARD", True, (220, 230, 210))
-    screen.blit(head, (x, y0 - 2))
+    x, y0 = W - w - 10, 14          # top-right corner, no background panel
+    head = _text_outlined(font, "LEADERBOARD", (220, 230, 210))
+    screen.blit(head, (x, y0 - 4))
     for i, c in enumerate(order):
         yc = y0 + 18 + i * row_h
-        name = c.name if c is not player else f"{c.name} (you)"
+        name = c.name                      # the player's row is already highlighted yellow
         color = (255, 235, 120) if c is player else (235, 235, 235)
         pygame.draw.circle(screen, c.color, (x + 6, yc + 8), 4)
         pygame.draw.circle(screen, (255, 255, 255), (x + 6, yc + 8), 4, 1)
-        num = font.render(f"{i + 1}.", True, color)
-        screen.blit(num, (x + 14, yc))
-        tx = x + 36
+        screen.blit(_text_outlined(font, f"{i + 1}.", color), (x + 12, yc))
+        tx = x + 34
         flag = get_flag(c.flag, 11) if c.flag else None
         if flag:
             screen.blit(flag, (tx, yc + 4))
+            pygame.draw.rect(screen, (30, 30, 30), (tx, yc + 4, flag.get_width(), flag.get_height()), 1)
             tx += flag.get_width() + 3
-        text = font.render(name, True, (150, 90, 90) if c.dead else color)
-        screen.blit(text, (tx, yc))
+        screen.blit(_text_outlined(font, name, (170, 110, 110) if c.dead else color), (tx, yc))
         if c.dead:
-            tag = font.render("OUT", True, (210, 90, 90))
+            tag = _text_outlined(font, "OUT", (230, 110, 110))
         else:
-            tag = font.render(f"L{min(lap_of(c) + 1, TOTAL_LAPS)}", True, (170, 185, 165))
-        screen.blit(tag, tag.get_rect(topright=(x + w - 8, yc)))
+            tag = _text_outlined(font, f"L{min(lap_of(c) + 1, TOTAL_LAPS)}", (185, 200, 180))
+        screen.blit(tag, tag.get_rect(topright=(x + w - 6, yc)))
 
 def draw_hud(screen, car, font=None, cars=None):
     draw_hearts(screen, car.hearts)
