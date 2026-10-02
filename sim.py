@@ -829,6 +829,7 @@ class Car:
         self.slow_time = 0.0
         self.reverse_time = 0.0
         self.wedged = 0.0           # seconds spent barely moving (backing up included)
+        self.rescues = 0            # how many times this kart has been put back on the road
         # bots only
         self.is_bot = False
         self.is_remote = False      # true for other players' cars in multiplayer (driven by net)
@@ -1019,6 +1020,7 @@ class Car:
 
     def rescue(self):
         # back onto the road beside where it got stuck, pointing the right way, at rest
+        self.rescues += 1
         s, lat, self.track_idx = track_coords(self.x, self.y, self.track_idx)
         half = ROAD_WIDTH / 2 - 2 * CAR_HW
         self.x, self.y, self.angle = road_pose(s, max(-half, min(half, lat * 0.5)))
