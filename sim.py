@@ -43,6 +43,15 @@ FENCE_SOURCES = {
 FENCE_UP_ROW_FROM = "fence_ud"  # its top row is the rail going up
 FENCE_COLOR = (117, 83, 56)     # flat fallback if the fence tiles are missing
 
+# ---- sun and shadows ----------------------------------------------------------------
+SUN_ANGLE = 55.0            # world-space direction sunlight travels towards (degrees)
+SUN_DIR_X = math.cos(math.radians(SUN_ANGLE))
+SUN_DIR_Y = math.sin(math.radians(SUN_ANGLE))
+FENCE_SHADOW_DIST = 8.0     # world px post shadow projection
+FENCE_SHADOW_COLOR = (12, 14, 26, 105)
+CAR_SHADOW_DIST = 7.0       # world px car shadow projection
+CAR_SHADOW_COLOR = (12, 14, 26, 105)
+
 # ---- UI assets (icons + pixel font) ------------------------------------------------
 UI_DIR = os.path.join(ASSET_DIR, "UI")
 FLAGS_DIR = os.path.join(ASSET_DIR, "flags")
@@ -319,6 +328,7 @@ INNER = None        # 2x2 inner-corner road tiles, [qy][qx]
 CHECK = None        # checkered finish-line tile (center)
 CHECK_TILES = {}    # center, left, right, top, bottom check tiles
 FENCE = {}          # (up, down, left, right) -> 16 px fence piece, all 16 combinations
+FENCE_SHADOWS = {}  # (up, down, left, right) -> directional fence shadow surface
 PARTICLE_RAW = None # 16x16 star particle graphic from assets/particle.png
 _PARTICLE_CACHE = {} # (r, g, b, size, alpha_step) -> cached tinted pygame.Surface
 
@@ -365,9 +375,11 @@ def load_assets():
     try:
         _build_fence_tiles({name: _load(FENCE_TILE_DIR, name, alpha=True)
                             for name in set(FENCE_SOURCES.values()) | {FENCE_UP_ROW_FROM}})
+        _build_fence_shadows()
     except (pygame.error, FileNotFoundError) as e:
         print("fence tiles missing, drawing fences as flat colour instead:", e)
         FENCE.clear()
+        FENCE_SHADOWS.clear()
 
     UI.clear()
     for name in UI_ICON_NAMES:
@@ -389,6 +401,29 @@ def _build_fence_tiles(src):
             for x in range(TILE):
                 tile.set_at((x, 0), up_row[x] if u else (0, 0, 0, 0))
             FENCE[(u, d, l, r)] = tile
+
+def _build_fence_shadows():
+    FENCE_SHADOWS.clear()
+    dx = round(SUN_DIR_X * FENCE_SHADOW_DIST)
+    dy = round(SUN_DIR_Y * FENCE_SHADOW_DIST)
+    sw, sh = TILE + dx + 4, TILE + dy + 4
+    for links, tile in FENCE.items():
+        s_surf = pygame.Surface((sw, sh), pygame.SRCALPHA)
+        for y in range(TILE):
+            for x in range(TILE):
+                c = tile.get_at((x, y))
+                if c[3] > 60:
+                    is_rail = (x < 4 or x > 11)
+                    fh = 0.75 if is_rail else max(0.15, (14 - y) / 12.0)
+                    sx = fh * dx
+                    sy = fh * dy
+                    steps = max(1, int(round(fh * 4)))
+                    for st in range(steps + 1):
+                        t = st / steps
+                        px = int(round(x + sx * t))
+                        py = int(round(y + sy * t))
+                        s_surf.set_at((px, py), FENCE_SHADOW_COLOR)
+        FENCE_SHADOWS[links] = s_surf
 
 def _load(folder, name, alpha):
     img = pygame.image.load(os.path.join(folder, name + ".png"))
@@ -930,7 +965,19 @@ def build_ground():
 
     _bake_finish(surf, ox, oy)
 
-    # fences, top row first so each post's cap overlaps the shadow of the post above it
+    # fence shadows on the ground (direction-based projection baked before fence posts)
+    for gx, gy, links in FENCES:
+        px, py = gx * TILE - ox, gy * TILE - oy
+        s_tile = FENCE_SHADOWS.get(links)
+        if s_tile is not None:
+            surf.blit(s_tile, (px, py))
+        elif not FENCE:
+            # fallback if fence tiles missing
+            dx = round(SUN_DIR_X * FENCE_SHADOW_DIST)
+            dy = round(SUN_DIR_Y * FENCE_SHADOW_DIST)
+            surf.fill(FENCE_SHADOW_COLOR, (px + 3 + dx, py + 1 + dy, 11, 13))
+
+    # fences, top row first so each post's cap overlaps the post above it
     for gx, gy, links in sorted(FENCES, key=lambda f: f[1]):
         px, py = gx * TILE - ox, gy * TILE - oy
         tile = FENCE.get(links)
@@ -1981,6 +2028,59 @@ STACK_LIFT = 1          # px each slice is drawn above the one below
 def _shade(col, f):
     return (int(col[0] * f), int(col[1] * f), int(col[2] * f))
 
+_CAR_SHADOW_SURF = None
+
+def draw_car_shadow(screen, car, cam):
+    global _CAR_SHADOW_SURF
+    sx, sy = cam.to_screen(car.x, car.y)
+    if not (-80 <= sx <= W + 80 and -80 <= sy <= H + 80):
+        return
+
+    rad = math.radians(car.angle)
+    c, s = math.cos(rad), math.sin(rad)
+
+    def ground_pt(lx, ly, off_h=0.0):
+        wx = car.x + lx * c - ly * s + SUN_DIR_X * off_h
+        wy = car.y + lx * s + ly * c + SUN_DIR_Y * off_h
+        return cam.to_screen(wx, wy)
+
+    shadow_pts_body = [ground_pt(lx, ly, CAR_SHADOW_DIST) for lx, ly in KART_BODY]
+    shadow_pts_base = [ground_pt(lx, ly, 0.5) for lx, ly in KART_BODY]
+
+    all_pts = shadow_pts_body + shadow_pts_base
+    min_x = math.floor(min(p[0] for p in all_pts)) - 4
+    max_x = math.ceil(max(p[0] for p in all_pts)) + 4
+    min_y = math.floor(min(p[1] for p in all_pts)) - 4
+    max_y = math.ceil(max(p[1] for p in all_pts)) + 4
+    sw, sh = max_x - min_x, max_y - min_y
+    if sw <= 0 or sh <= 0 or min_x > W or max_x < 0 or min_y > H or max_y < 0:
+        return
+
+    if _CAR_SHADOW_SURF is None or _CAR_SHADOW_SURF.get_width() < sw or _CAR_SHADOW_SURF.get_height() < sh:
+        _CAR_SHADOW_SURF = pygame.Surface((max(160, sw), max(160, sh)), pygame.SRCALPHA)
+    else:
+        _CAR_SHADOW_SURF.fill((0, 0, 0, 0), (0, 0, sw, sh))
+
+    local_base = [(p[0] - min_x, p[1] - min_y) for p in shadow_pts_base]
+    local_body = [(p[0] - min_x, p[1] - min_y) for p in shadow_pts_body]
+
+    pygame.draw.polygon(_CAR_SHADOW_SURF, CAR_SHADOW_COLOR, local_base)
+    pygame.draw.polygon(_CAR_SHADOW_SURF, CAR_SHADOW_COLOR, local_body)
+    for i in range(len(KART_BODY)):
+        j = (i + 1) % len(KART_BODY)
+        quad = [local_base[i], local_base[j], local_body[j], local_body[i]]
+        pygame.draw.polygon(_CAR_SHADOW_SURF, CAR_SHADOW_COLOR, quad)
+
+    for ax, steer in ((AXLE_FRONT, car.steer_angle), (-AXLE_REAR, 0.0)):
+        cw, sw_ = math.cos(steer), math.sin(steer)
+        for side in (-1, 1):
+            wy = side * WHEEL_Y
+            w_pts = [ground_pt(ax + wl * cw - ww * sw_, wy + wl * sw_ + ww * cw, 1.0)
+                     for wl, ww in ((3.5, 2.0), (3.5, -2.0), (-3.5, -2.0), (-3.5, 2.0))]
+            pygame.draw.polygon(_CAR_SHADOW_SURF, CAR_SHADOW_COLOR, [(p[0] - min_x, p[1] - min_y) for p in w_pts])
+
+    screen.blit(_CAR_SHADOW_SURF, (min_x, min_y), (0, 0, sw, sh))
+
 def draw_car(screen, car, cam):
     rad = math.radians(car.angle)
     c, s = math.cos(rad), math.sin(rad)
@@ -2086,6 +2186,8 @@ def draw_world(screen, cam, cars):
     draw_ground(screen, cam)
     draw_trails(screen, cars, cam)
     draw_boxes(screen, cam)
+    for car in cars:
+        draw_car_shadow(screen, car, cam)
     for car in cars:
         draw_car(screen, car, cam)
     draw_particles(screen, cam)

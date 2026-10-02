@@ -96,6 +96,35 @@ class TestParticlesTracksGyro(unittest.TestCase):
             self.assertAlmostEqual(sx, sim.W / 2, delta=0.001)
             self.assertAlmostEqual(sy, sim.H / 2, delta=0.001)
 
+    def test_direction_based_shadows(self):
+        # Verify sun direction vector
+        self.assertAlmostEqual(sim.SUN_DIR_X**2 + sim.SUN_DIR_Y**2, 1.0, delta=0.001)
+
+        # Verify fence shadows built
+        self.assertGreater(len(sim.FENCE_SHADOWS), 0, "FENCE_SHADOWS should have baked tiles")
+        sample_shadow = next(iter(sim.FENCE_SHADOWS.values()))
+        self.assertIsInstance(sample_shadow, pygame.Surface)
+
+        # Verify car shadow rendering
+        car = sim.Car(sim.W / 2, sim.H / 2, 45.0, (255, 0, 0))
+        cam = sim.Camera(car)
+        screen = pygame.Surface((sim.W, sim.H))
+        screen.fill(sim.GRASS_COLOR)
+        sim.draw_car_shadow(screen, car, cam)
+
+        # Check that pixels beneath/around the car were darkened by the shadow
+        # Car is at W/2, H/2. Light is from top-left, so shadow is cast to bottom-right
+        darkened = False
+        for ox in range(0, 30):
+            for oy in range(0, 30):
+                c = screen.get_at((int(sim.W / 2 + ox), int(sim.H / 2 + oy)))
+                if c[0] < sim.GRASS_COLOR[0] and c[1] < sim.GRASS_COLOR[1]:
+                    darkened = True
+                    break
+            if darkened:
+                break
+        self.assertTrue(darkened, "Car shadow should darken ground in sun direction")
+
 
 if __name__ == "__main__":
     unittest.main()
