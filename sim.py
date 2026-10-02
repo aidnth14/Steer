@@ -1883,18 +1883,6 @@ def _pixel_bar(screen, color, rect, r=2):
 
 def draw_hud(screen, car, font=None, cars=None):
     draw_hearts(screen, car.hearts)
-    # bash meter under the hearts: one blue bar, rounded pixel corners, no label
-    x, y, w, h = 14, 44, 76, 9
-    ready = 1.0 - car.bash_cd / BASH_COOLDOWN
-    _pixel_bar(screen, (28, 30, 38), (x - 1, y - 1, w + 2, h + 2), r=2)
-    _pixel_bar(screen, (70, 150, 255), (x, y, int(w * ready), h), r=2)
-    # lap time (current) + best, top-centre
-    tf = get_font(22)
-    cur = max(0.0, car.race_t - car.last_lap_t)
-    lap_s = tf.render(f"LAP  {fmt_time(cur)}", True, (255, 255, 255))
-    best_s = tf.render(f"BEST {fmt_time(car.best_lap)}", True, (255, 235, 120))
-    screen.blit(lap_s, lap_s.get_rect(midtop=(W / 2, 6)))
-    screen.blit(best_s, best_s.get_rect(midtop=(W / 2, 24)))
     if cars is not None:
         draw_leaderboard(screen, cars, car)
         draw_minimap(screen, cars, car)
