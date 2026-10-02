@@ -47,10 +47,10 @@ FENCE_COLOR = (117, 83, 56)     # flat fallback if the fence tiles are missing
 SUN_ANGLE = 55.0            # world-space direction sunlight travels towards (degrees)
 SUN_DIR_X = math.cos(math.radians(SUN_ANGLE))
 SUN_DIR_Y = math.sin(math.radians(SUN_ANGLE))
-FENCE_SHADOW_DIST = 8.0     # world px post shadow projection
-FENCE_SHADOW_COLOR = (12, 14, 26, 105)
-CAR_SHADOW_DIST = 7.0       # world px car shadow projection
-CAR_SHADOW_COLOR = (12, 14, 26, 105)
+FENCE_SHADOW_DIST = 16.0    # world px post shadow projection (bolder, longer)
+FENCE_SHADOW_COLOR = (10, 12, 22, 175) # rich, dark, visible contrast
+CAR_SHADOW_DIST = 9.0       # world px car shadow projection
+CAR_SHADOW_COLOR = (10, 15, 25, 140)
 
 # ---- UI assets (icons + pixel font) ------------------------------------------------
 UI_DIR = os.path.join(ASSET_DIR, "UI")
@@ -175,21 +175,26 @@ HEART_COOLDOWN = 1.0  # seconds before another penalty can apply
 
 # ---- mystery boxes ----------------------------------------------------------------
 BOX_COUNT = 10        # floating "?" boxes scattered around the loop
-BOX_SIZE = 20         # px, on-screen box size
-BOX_PICKUP = 18.0     # px pickup radius (plus the car's half-width)
+BOX_SIZE = 30         # px, on-screen box size (enlarged)
+BOX_PICKUP = 22.0     # px pickup radius (plus the car's half-width)
 BOX_RESPAWN = 6.0     # seconds a box stays gone after being taken
-BOX_FLOAT_AMP = 3.5   # px vertical bob
+BOX_FLOAT_AMP = 4.0   # px vertical bob
 BOX_FLOAT_SPEED = 3.0 # bob rad/s
 BOX_LATERAL = 0.30    # how far off centre a box may sit, as a fraction of road half-width
 BOOST_TIME = 1.8      # seconds of engine boost from a box
 BOOST_PACE = 0.9      # extra engine while boosting (+90%)
 BOOST_KICK = 90.0     # instant forward px/s on pickup
-# three box types: colour tells you the power-up inside
-BOX_TYPES = ["boost", "heart", "bash"]
-BOX_COLORS = {"boost": (255, 205, 60),      # yellow = speed boost
-              "heart": (70, 150, 255),       # blue   = +1 heart
-              "bash":  (235, 70, 70)}         # red    = instant bash recharge
-BOX_LETTER = {"boost": "!", "heart": "+", "bash": "x"}
+
+# Single mystery box: arcade blue "?" box that dispenses random powerups
+POWERUP_KINDS = ["boost", "heart", "bash"]
+BOX_TYPES = ["mystery"]
+BOX_COLORS = {
+    "mystery": (45, 145, 255),    # vibrant arcade blue
+    "boost":   (45, 145, 255),    # compatibility fallback
+    "heart":   (45, 145, 255),
+    "bash":    (45, 145, 255),
+}
+BOX_LETTER = {"mystery": "?", "boost": "?", "heart": "?", "bash": "?"}
 
 # ---- laps -------------------------------------------------------------------------
 TOTAL_LAPS = 3        # laps to finish a race
@@ -406,7 +411,7 @@ def _build_fence_shadows():
     FENCE_SHADOWS.clear()
     dx = round(SUN_DIR_X * FENCE_SHADOW_DIST)
     dy = round(SUN_DIR_Y * FENCE_SHADOW_DIST)
-    sw, sh = TILE + dx + 4, TILE + dy + 4
+    sw, sh = TILE + dx + 6, TILE + dy + 6
     for links, tile in FENCE.items():
         s_surf = pygame.Surface((sw, sh), pygame.SRCALPHA)
         for y in range(TILE):
@@ -414,15 +419,18 @@ def _build_fence_shadows():
                 c = tile.get_at((x, y))
                 if c[3] > 60:
                     is_rail = (x < 4 or x > 11)
-                    fh = 0.75 if is_rail else max(0.15, (14 - y) / 12.0)
+                    fh = 0.8 if is_rail else max(0.2, (15 - y) / 12.0)
                     sx = fh * dx
                     sy = fh * dy
-                    steps = max(1, int(round(fh * 4)))
+                    steps = max(2, int(round(fh * 6)))
                     for st in range(steps + 1):
                         t = st / steps
                         px = int(round(x + sx * t))
                         py = int(round(y + sy * t))
                         s_surf.set_at((px, py), FENCE_SHADOW_COLOR)
+                        if not is_rail:
+                            s_surf.set_at((px + 1, py), FENCE_SHADOW_COLOR)
+                            s_surf.set_at((px, py + 1), FENCE_SHADOW_COLOR)
         FENCE_SHADOWS[links] = s_surf
 
 def _load(folder, name, alpha):
@@ -1834,8 +1842,7 @@ def spawn_boxes():
         s = (i + 0.5) / BOX_COUNT * ROAD_LEN                     # evenly spaced around the loop
         lateral = rng.uniform(-1, 1) * ROAD_WIDTH * 0.5 * BOX_LATERAL
         x, y, _ = road_pose(s, lateral)
-        kind = BOX_TYPES[i % len(BOX_TYPES)]                     # cycle yellow / blue / red
-        BOXES.append({"x": x % WORLD, "y": y % WORLD, "kind": kind,
+        BOXES.append({"x": x % WORLD, "y": y % WORLD, "kind": "mystery",
                       "phase": rng.uniform(0, 2 * math.pi), "timer": 0.0})
 
 def give_powerup(car, kind):
@@ -1867,11 +1874,12 @@ def _update_boxes(dt, cars):
             dx = wrap_delta(b["x"], car.x)
             dy = wrap_delta(b["y"], car.y)
             if dx * dx + dy * dy <= reach_sq:
-                give_powerup(car, b["kind"])
+                kind = random.choice(POWERUP_KINDS)
+                give_powerup(car, kind)
                 b["timer"] = BOX_RESPAWN
-                spawn_particles(b["x"], b["y"], 24, 140, BOX_COLORS[b["kind"]], 0.65)
+                spawn_particles(b["x"], b["y"], 24, 140, BOX_COLORS.get("mystery", (45, 145, 255)), 0.65)
                 if NET_ROLE == "host":
-                    BOX_EVENTS.append((idx, slot, b["kind"]))
+                    BOX_EVENTS.append((idx, slot, kind))
                 break
 
 def apply_box_event(idx, kind):
@@ -1880,7 +1888,7 @@ def apply_box_event(idx, kind):
     if 0 <= idx < len(BOXES):
         b = BOXES[idx]
         b["timer"] = BOX_RESPAWN
-        spawn_particles(b["x"], b["y"], 24, 140, BOX_COLORS.get(kind, (255, 215, 70)), 0.65)
+        spawn_particles(b["x"], b["y"], 24, 140, BOX_COLORS.get("mystery", (45, 145, 255)), 0.65)
 
 def lap_of(car):
     # laps completed since the start line; progress is px driven along the loop
@@ -2167,14 +2175,15 @@ def draw_box(screen, box, cam):
     r = BOX_SIZE // 2
     cy = sy + bob
     # ground shadow stays put while the box bobs, so it reads as floating
-    shadow = pygame.Surface((BOX_SIZE, 7), pygame.SRCALPHA)
-    pygame.draw.ellipse(shadow, (0, 0, 0, 90), shadow.get_rect())
-    screen.blit(shadow, (int(sx - r), int(sy + r)))
+    shadow = pygame.Surface((BOX_SIZE + 4, 10), pygame.SRCALPHA)
+    pygame.draw.ellipse(shadow, (0, 0, 0, 110), shadow.get_rect())
+    screen.blit(shadow, (int(sx - r - 2), int(sy + r + 3)))
     rect = pygame.Rect(int(sx - r), int(cy - r), BOX_SIZE, BOX_SIZE)
-    kind = box.get("kind", "boost")
-    pygame.draw.rect(screen, BOX_COLORS[kind], rect, border_radius=5)
-    pygame.draw.rect(screen, (255, 255, 255), rect, 2, border_radius=5)
-    q = get_font(22).render(BOX_LETTER[kind], True, (25, 25, 30))
+    kind = box.get("kind", "mystery")
+    box_col = BOX_COLORS.get(kind, (45, 145, 255))
+    pygame.draw.rect(screen, box_col, rect, border_radius=6)
+    pygame.draw.rect(screen, (255, 255, 255), rect, 2, border_radius=6)
+    q = get_font(26).render(BOX_LETTER.get(kind, "?"), True, (255, 255, 255))
     screen.blit(q, q.get_rect(center=rect.center))
 
 def draw_boxes(screen, cam):

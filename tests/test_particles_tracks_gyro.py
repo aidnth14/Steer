@@ -125,6 +125,25 @@ class TestParticlesTracksGyro(unittest.TestCase):
                 break
         self.assertTrue(darkened, "Car shadow should darken ground in sun direction")
 
+    def test_blue_mystery_boxes_and_random_powerups(self):
+        # Verify box size is enlarged (>= 28px)
+        self.assertGreaterEqual(sim.BOX_SIZE, 28)
+
+        # Verify only blue mystery box
+        self.assertEqual(sim.BOX_TYPES, ["mystery"])
+        self.assertEqual(sim.BOX_COLORS["mystery"], (45, 145, 255))
+        self.assertEqual(sim.BOX_LETTER["mystery"], "?")
+
+        # Verify spawn_boxes produces mystery boxes
+        sim.new_map(25524)
+        for b in sim.BOXES:
+            self.assertEqual(b["kind"], "mystery")
+
+        # Verify powerup pool contains boost, heart, bash
+        self.assertIn("boost", sim.POWERUP_KINDS)
+        self.assertIn("heart", sim.POWERUP_KINDS)
+        self.assertIn("bash", sim.POWERUP_KINDS)
+
 
 if __name__ == "__main__":
     unittest.main()
