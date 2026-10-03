@@ -33,6 +33,7 @@ INNER_TILE_NAMES = [            # [qy][qx]: dirt tile with grass only in that co
     ["dirt_inner_bl", "dirt_inner_br"],
 ]
 FENCE_TILE_DIR = os.path.join(ASSET_DIR, "fence_tiles")
+FX_DIR = os.path.join(ASSET_DIR, "fx")
 # Each fence piece is a post with rails out to the neighbouring posts. The file name says which
 # way the rails go (u/d/l/r). Whether there's a rail going up only changes the tile's top pixel
 # row, so these 11 cover all 16 combinations: (down, left, right) -> file to start from.
@@ -111,6 +112,13 @@ def init_audio():
     except pygame.error as e:
         print("audio unavailable:", e)
 
+SFX_VOLUME = 0.8        # effect volume (bashes, crashes, pickups)
+MUSIC_VOLUME = 0.6      # background music volume
+SFX_MUTED = False       # True while in menus / attract mode -> silence all SFX
+MASTER_MUTE = False     # player's global mute toggle (silences SFX + music)
+_music_loaded = False
+MUSIC_FILES = ("music.mp3", "music.ogg", "music.wav", "theme.mp3", "theme.ogg")
+
 def load_sounds():
     SOUNDS.clear()
     if not _mixer_ready:
@@ -118,29 +126,67 @@ def load_sounds():
     for key, fn in SOUND_FILES.items():
         try:
             s = pygame.mixer.Sound(os.path.join(SOUND_DIR, fn))
-            s.set_volume(SOUND_VOL.get(key, 0.6) * MASTER_VOLUME)
+            s.set_volume(SOUND_VOL.get(key, 0.6) * SFX_VOLUME)
             SOUNDS[key] = s
         except (pygame.error, FileNotFoundError):
             pass
 
-MASTER_VOLUME = 0.8
-
-def set_master_volume(v):
-    global MASTER_VOLUME
-    MASTER_VOLUME = max(0.0, min(1.0, v))
+def set_sfx_volume(v):
+    global SFX_VOLUME
+    SFX_VOLUME = max(0.0, min(1.0, v))
     for key, s in SOUNDS.items():
-        s.set_volume(SOUND_VOL.get(key, 0.6) * MASTER_VOLUME)
+        s.set_volume(SOUND_VOL.get(key, 0.6) * SFX_VOLUME)
+
+def set_music_volume(v):
+    global MUSIC_VOLUME
+    MUSIC_VOLUME = max(0.0, min(1.0, v))
+    if _mixer_ready:
+        try:
+            pygame.mixer.music.set_volume(MUSIC_VOLUME)
+        except pygame.error:
+            pass
+
+def start_music():
+    # loops an optional soundtrack if one is dropped into assets/sound (music.* / theme.*)
+    global _music_loaded
+    if not _mixer_ready or _music_loaded:
+        return
+    for fn in MUSIC_FILES:
+        p = os.path.join(SOUND_DIR, fn)
+        if os.path.exists(p):
+            try:
+                pygame.mixer.music.load(p)
+                pygame.mixer.music.set_volume(MUSIC_VOLUME)
+                pygame.mixer.music.play(-1)
+                _music_loaded = True
+            except pygame.error:
+                pass
+            return
+
+def set_master_mute(on):
+    global MASTER_MUTE
+    MASTER_MUTE = bool(on)
+    if _mixer_ready:
+        try:
+            pygame.mixer.music.set_volume(0.0 if MASTER_MUTE else MUSIC_VOLUME)
+        except pygame.error:
+            pass
 
 def play(name):
+    if SFX_MUTED or MASTER_MUTE:
+        return
     s = SOUNDS.get(name)
     if s is not None:
         try:
             s.play()
         except pygame.error:
             pass
+PIXELLARI_PATH = os.path.join(ASSET_DIR, "pixellari", "Pixellari.ttf")
+PIXELTA_PATH = os.path.join(ASSET_DIR, "pixelta", "Pixelta.ttf")
+DAYDREAM_PATH = os.path.join(ASSET_DIR, "daydream", "Daydream.otf")
 PIXEMON_PATH = os.path.join(ASSET_DIR, "pixemon", "Pixemon.otf")
 JERSEY_PATH = os.path.join(ASSET_DIR, "font", "Jersey25-Regular.ttf")
-FONT_PATH = PIXEMON_PATH if os.path.exists(PIXEMON_PATH) else JERSEY_PATH
+FONT_PATH = next((p for p in (PIXELLARI_PATH, PIXELTA_PATH, DAYDREAM_PATH, PIXEMON_PATH, JERSEY_PATH) if os.path.exists(p)), JERSEY_PATH)
 UI = {}             # UI icon surfaces by name
 _FONT_CACHE = {}
 
@@ -177,8 +223,8 @@ HEART_COOLDOWN = 1.0  # seconds before another penalty can apply
 
 # ---- mystery boxes ----------------------------------------------------------------
 BOX_COUNT = 10        # floating "?" boxes scattered around the loop
-BOX_SIZE = 30         # px, on-screen box size (enlarged)
-BOX_PICKUP = 22.0     # px pickup radius (plus the car's half-width)
+BOX_SIZE = 38         # px, on-screen box size (further enlarged)
+BOX_PICKUP = 26.0     # px pickup radius (plus the car's half-width)
 BOX_RESPAWN = 6.0     # seconds a box stays gone after being taken
 BOX_FLOAT_AMP = 4.0   # px vertical bob
 BOX_FLOAT_SPEED = 3.0 # bob rad/s
@@ -188,15 +234,17 @@ BOOST_PACE = 0.9      # extra engine while boosting (+90%)
 BOOST_KICK = 90.0     # instant forward px/s on pickup
 
 # Single mystery box: arcade blue "?" box that dispenses random powerups
-POWERUP_KINDS = ["boost", "heart", "bash"]
+POWERUP_KINDS = ["boost", "heart", "bash", "cone", "oil"]
 BOX_TYPES = ["mystery"]
 BOX_COLORS = {
     "mystery": (45, 145, 255),    # vibrant arcade blue
     "boost":   (45, 145, 255),    # compatibility fallback
     "heart":   (45, 145, 255),
     "bash":    (45, 145, 255),
+    "cone":    (255, 140, 30),
+    "oil":     (45, 45, 55),
 }
-BOX_LETTER = {"mystery": "?", "boost": "?", "heart": "?", "bash": "?"}
+BOX_LETTER = {"mystery": "?", "boost": "?", "heart": "?", "bash": "?", "cone": "C", "oil": "O"}
 
 # ---- laps -------------------------------------------------------------------------
 TOTAL_LAPS = 3        # laps to finish a race
@@ -204,7 +252,7 @@ TOTAL_LAPS = 3        # laps to finish a race
 # ---- car body ---------------------------------------------------------------------
 # units are px, seconds and "kart masses"; +x = forward, +y = the kart's right side
 CAR_HL = 14.0          # half length of the kart's collision box
-CAR_HW = 9.0           # half width
+CAR_HW = 7.0           # half width (matches the sprite hull so contacts line up visually)
 AXLE_FRONT = 9.5       # centre of mass -> front axle
 AXLE_REAR = 8.5        # centre of mass -> rear axle (a bit more weight on the driven rear)
 WHEELBASE = AXLE_FRONT + AXLE_REAR
@@ -227,11 +275,35 @@ TIRE_SHAPE = 1.45       # >1: grip drops off past the peak (so slides happen and
 DRIVE_GRIP_USE = 0.45   # how much of the rear tyres' grip the always-on engine uses up -> rear steps out first
 STEER_MAX = 0.6         # front wheel lock at low speed, rad (~34 deg)
 STEER_GRIP_RATIO = 1.2  # at speed, full lock asks for this x the available grip -> full lock = a slide
-STEER_RATE = 5.0        # how fast the front wheels turn, rad/s
+STEER_RATE = 5.0        # how fast the front wheels turn left/right, rad/s (steering responsiveness)
+STEER_RATE_MIN = 2.5    # slider ends: slow, deliberate steering ...
+STEER_RATE_MAX = 11.0   # ... to near-instant, twitchy steering
+
+def set_steer_rate(v):
+    # v in 0..1 -> STEER_RATE across the slider range
+    global STEER_RATE
+    v = max(0.0, min(1.0, v))
+    STEER_RATE = STEER_RATE_MIN + (STEER_RATE_MAX - STEER_RATE_MIN) * v
+
+def steer_rate_frac():
+    return (STEER_RATE - STEER_RATE_MIN) / (STEER_RATE_MAX - STEER_RATE_MIN)
 V_FLOOR = 40.0          # px/s; keeps slip angles sane when nearly stopped
 YAW_DAMP = 0.6          # a little rotational damping, 1/s
 STABILITY = 3.0         # 1/s: pulls the spin rate toward what the steering asks for, so a slide can
                         # be caught instead of snapping into a spin (off while staggered by a hit)
+STABILITY_MIN = 0.0     # drift-assist slider ends: 0 = loose/driftly ...
+STABILITY_MAX = 7.0     # ... to strongly planted (lots of assist)
+
+def set_drift_assist(v):
+    # slider 0..1 -> STABILITY (how hard the kart is held straight / caught out of a slide)
+    global STABILITY
+    v = max(0.0, min(1.0, v))
+    STABILITY = STABILITY_MIN + (STABILITY_MAX - STABILITY_MIN) * v
+
+def drift_assist_frac():
+    return (STABILITY - STABILITY_MIN) / (STABILITY_MAX - STABILITY_MIN)
+
+INVERT_STEER = False    # flip left/right steering input for the player
 PHYS_SUBSTEPS = 4       # physics steps per frame (stable collisions + tyres)
 
 # ---- grass ---------------------------------------------------------------------------
@@ -270,6 +342,16 @@ WALL_HIT_IMPULSE = 60.0 # min collision impulse with a fence to trigger the red 
 MAX_SPIN = 9.0          # rad/s cap on how fast any kart can spin (~1.4 turns a second)
 STAGGER_TIME = 0.45     # seconds a bashed kart's tyres are loose
 STAGGER_GRIP = 0.5      # grip multiplier while staggered
+
+# ---- projectiles & oil slicks --------------------------------------------------------------
+PROJ_SPEED = 430.0      # projectile muzzle speed, px/s
+PROJ_LIFE = 1.4         # seconds a projectile lives
+PROJ_COOLDOWN = 0.9     # seconds between shots
+PROJ_R = 5.0            # projectile radius (collision + draw)
+PROJ_KNOCK = 190.0      # shove given to a kart that gets hit
+OIL_MAX = 16            # most oil slicks on the track at once
+OIL_R = 22.0            # slick radius
+OIL_SPAWN_CHANCE = 0.7  # chance to drop a cluster of oil when a kart starts a new lap
 
 # ---- getting unstuck -----------------------------------------------------------------------
 STUCK_SPEED = 25.0      # below this px/s ...
@@ -312,6 +394,16 @@ TRAIL_MAX_POINTS = 3000
 MAX_PARTICLES = 1200
 SHAKE_PX = 6.0          # screen shake at full strength
 SHAKE_IMPULSE = 260.0   # hit strength that gives full shake
+SHAKE_SCALE = 1.0       # player-set multiplier on shake (0 = off, up to 2x)
+SHAKE_MAX = 2.0         # slider top end
+
+def set_shake_intensity(v):
+    # slider 0..1 -> SHAKE_SCALE across 0..SHAKE_MAX
+    global SHAKE_SCALE
+    SHAKE_SCALE = max(0.0, min(1.0, v)) * SHAKE_MAX
+
+def shake_intensity_frac():
+    return min(1.0, SHAKE_SCALE / SHAKE_MAX)
 
 CAM_POS_SMOOTH = 6.0    # higher = camera position snaps to the car faster
 CAM_ROT_SMOOTH = 4.0    # higher = camera rotation snaps faster
@@ -338,20 +430,135 @@ FENCE = {}          # (up, down, left, right) -> 16 px fence piece, all 16 combi
 FENCE_SHADOWS = {}  # (up, down, left, right) -> directional fence shadow surface
 PARTICLE_RAW = None # 16x16 star particle graphic from assets/particle.png
 _PARTICLE_CACHE = {} # (r, g, b, size, alpha_step) -> cached tinted pygame.Surface
+CAR_STACK = None    # 8 grayscale 16x16 slices (luminance) for the sprite-stacked kart
+_CARSCALE_CACHE = {} # zoom-width -> list of scaled grayscale slices
+_CARTINT_CACHE = {}  # (color, zoom-width) -> list of scaled + colour-tinted slices
+FX_SHEETS = {"dust1": "Dust_01", "dust2": "Dust_02", "fire1": "Fire_01", "fire2": "Fire_02"}
+FX_FRAMES = {}      # name -> list of cropped animation frames
+_FX_CACHE = {}      # (name, frame, zoom-width) -> scaled frame
+FX = []             # active one-shot effects: [x, y, name, age, dur, world_w, rot]
+BUSH_RAW = None     # 16x16 original green bush decoration from assets/bush.png
+BUSH_SIZE = 24      # px size of scaled bushes on the map (increased from 16 to 24)
+BUSH_SURF = None    # 24x24 green bush sprite
+BUSH_SHADOW = None  # directional shadow for bushes
+BUSHES = []         # (gx, gy) grid cells of decorative bushes on current map
+TREE_RAW = None     # 48x64 tree sprite (Tree 1) from assets/tree.png
+TREE2_RAW = None    # 48x64 tree sprite (Tree 2) from assets/tree2.png
+TREE3_RAW = None    # 48x64 tree sprite (Tree 3) from assets/tree3.png
+TREE_SURF = None    # 50x66 white-stroked Tree 1 sprite
+TREE2_SURF = None   # 50x66 white-stroked Tree 2 sprite
+TREE3_SURF = None   # 50x66 white-stroked Tree 3 sprite
+TREE_SHADOW = None  # directional ground shadow for Tree 1
+TREE2_SHADOW = None # directional ground shadow for Tree 2
+TREE3_SHADOW = None # directional ground shadow for Tree 3
+TREE_LOG_RAW = None # 16x16 tree log/stump sprite (Tree 1) from assets/tree_log.png
+TREE3_LOG_RAW = None # 16x16 tree log/stump sprite (Tree 3) from assets/tree3_log.png
+TREE_LOG_SHADOW = None # directional shadow for tree 1 logs
+TREE3_LOG_SHADOW = None # directional shadow for tree 3 logs
+TREES = []          # (gx, gy) grid cells of decorative trees on current map
+TREE_LOGS = []      # (gx, gy) grid cells of decorative tree logs on current map
+CONE_RAW = None     # 32x32 raw traffic cone sprite from assets/traffic_cone.png
+CONE_SURF = None    # 28x38 cropped & scaled traffic cone sprite (enlarged)
+CONE_SHADOW = None  # directional ground shadow for traffic cones
+CONES = []          # list of active traffic cone dicts on current map
+DESTRUCT_RAW = {}    # name -> raw surface from assets/destructibles/
+DESTRUCT_SURF = {}   # name -> stroked surface
+DESTRUCT_SHADOW = {} # name -> directional ground shadow
+DESTRUCTIBLES = []   # list of active destructibles: {"x", "y", "type", "destroyed", "wobble"}
+OIL_RAW = None      # 48x48 oil track sprite from assets/oil_track.png
+OIL_TILES = {}      # 16x16 modular tile slices ("top", "bot", "left", "right", "center")
+_OIL_SPRITE_CACHE = {} # (width, length) -> pygame.Surface
+_OIL_ZOOM_CACHE = {}   # (width, length, zw, zl) -> scaled pygame.Surface
+
+def _make_tree_stroked_and_shadow(raw_surf):
+    if raw_surf is None:
+        return None, None
+    w, h = raw_surf.get_size()
+    # Separate solid tree (alpha == 255) from baked shadow
+    solid = pygame.Surface((w, h), pygame.SRCALPHA)
+    for y in range(h):
+        for x in range(w):
+            c = raw_surf.get_at((x, y))
+            if c.a == 255:
+                solid.set_at((x, y), c)
+
+    # 1px white outline with 1px padding (total size w+2, h+2)
+    stroke_surf = pygame.Surface((w + 2, h + 2), pygame.SRCALPHA)
+    mask = pygame.Surface((w, h), pygame.SRCALPHA)
+    for y in range(h):
+        for x in range(w):
+            if solid.get_at((x, y)).a > 0:
+                mask.set_at((x, y), (255, 255, 255, 255))
+    for dx, dy in ((-1, 0), (1, 0), (0, -1), (0, 1), (-1, -1), (1, -1), (-1, 1), (1, 1)):
+        stroke_surf.blit(mask, (1 + dx, 1 + dy))
+    stroke_surf.blit(solid, (1, 1))
+
+    # Directional ground shadow: grounded base ellipse + skewed canopy silhouette in sun direction
+    shad_surf = pygame.Surface((w + 30, h + 30), pygame.SRCALPHA)
+    dx_s = round(SUN_DIR_X * 8)
+    dy_s = round(SUN_DIR_Y * 8)
+    pygame.draw.ellipse(shad_surf, (10, 15, 25, 110), (24 - 18 + dx_s, 58 - 9 + dy_s, 36, 18))
+    for y in range(h):
+        ht = (h - 1 - y) * 0.25
+        sx = round(SUN_DIR_X * ht)
+        sy = round(SUN_DIR_Y * ht)
+        for x in range(w):
+            if solid.get_at((x, y)).a > 0:
+                nx = x + sx
+                ny = y + sy
+                if 0 <= nx < shad_surf.get_width() and 0 <= ny < shad_surf.get_height():
+                    shad_surf.set_at((nx, ny), (10, 15, 25, 110))
+
+    return stroke_surf, shad_surf
+
+def _make_cone_stroked(cone_surf):
+    w, h = cone_surf.get_size()
+    stroke_surf = pygame.Surface((w + 2, h + 2), pygame.SRCALPHA)
+    mask = pygame.Surface((w, h), pygame.SRCALPHA)
+    for y in range(h):
+        for x in range(w):
+            if cone_surf.get_at((x, y)).a > 30:
+                mask.set_at((x, y), (255, 255, 255, 255))
+    for dx, dy in ((-1, 0), (1, 0), (0, -1), (0, 1), (-1, -1), (1, -1), (-1, 1), (1, 1)):
+        stroke_surf.blit(mask, (1 + dx, 1 + dy))
+    stroke_surf.blit(cone_surf, (1, 1))
+    return stroke_surf
 
 def load_assets():
     # needs a display surface to exist (convert); called at startup and after each hot reload
-    global TILES, INNER, GRASS_COLOR, DIRT_COLOR, CHECK, CHECK_TILES, PARTICLE_RAW
+    global TILES, INNER, GRASS_COLOR, DIRT_COLOR, CHECK, CHECK_TILES, PARTICLE_RAW, CAR_STACK
+    global BUSH_RAW, BUSH_SURF, BUSH_SHADOW, TREE_RAW, TREE2_RAW, TREE3_RAW, TREE_LOG_RAW, TREE3_LOG_RAW, TREE_LOG_SHADOW, TREE3_LOG_SHADOW
+    global TREE_SURF, TREE2_SURF, TREE3_SURF, TREE_SHADOW, TREE2_SHADOW, TREE3_SHADOW
+    global CONE_RAW, CONE_SURF, CONE_SHADOW, CONES
+    global DESTRUCT_RAW, DESTRUCT_SURF, DESTRUCT_SHADOW, DESTRUCTIBLES
+    global OIL_RAW, OIL_TILES, _OIL_SPRITE_CACHE, _OIL_ZOOM_CACHE
     TILES = INNER = None
     FENCE.clear()
     CHECK_TILES.clear()
     _PARTICLE_CACHE.clear()
+    _CARSCALE_CACHE.clear()
+    _CARTINT_CACHE.clear()
+    FX_FRAMES.clear()
+    _FX_CACHE.clear()
 
     try:
         PARTICLE_RAW = _load(ASSET_DIR, "particle", alpha=True)
     except (pygame.error, FileNotFoundError) as e:
         print("particle sprite missing, using fallback:", e)
         PARTICLE_RAW = None
+
+    try:
+        CAR_STACK = _build_car_stack(_load(ASSET_DIR, "car_stack", alpha=True))
+    except (pygame.error, FileNotFoundError) as e:
+        print("car stack sprite missing, using vector kart:", e)
+        CAR_STACK = None
+
+    for name, fn in FX_SHEETS.items():
+        try:
+            FX_FRAMES[name] = _slice_sheet_cropped(_load(FX_DIR, fn, alpha=True))
+        except (pygame.error, FileNotFoundError, ValueError) as e:
+            print(f"fx sheet {fn} missing:", e)
+
 
     grid = [[None] * 3 for _ in range(3)]
     for key, fn in (("center", "checktile"), ("left", "checktile1"), ("right", "checktile2"),
@@ -387,6 +594,158 @@ def load_assets():
         print("fence tiles missing, drawing fences as flat colour instead:", e)
         FENCE.clear()
         FENCE_SHADOWS.clear()
+
+    try:
+        bush_path = os.path.join(ASSET_DIR, "bush.png")
+        if os.path.exists(bush_path):
+            BUSH_RAW = pygame.image.load(bush_path).convert_alpha()
+        else:
+            bush1_path = os.path.join(ASSET_DIR, "Bush1.png")
+            if os.path.exists(bush1_path):
+                raw = pygame.image.load(bush1_path).convert_alpha()
+                BUSH_RAW = raw.subsurface((0, 0, 16, 16)).copy()
+            else:
+                BUSH_RAW = _load(ASSET_DIR, "bush", alpha=True)
+    except (pygame.error, FileNotFoundError) as e:
+        print("bush sprite missing, fallback to None:", e)
+        BUSH_RAW = None
+
+    if BUSH_RAW is not None:
+        BUSH_SURF = pygame.transform.scale(BUSH_RAW, (BUSH_SIZE, BUSH_SIZE))
+        BUSH_SHADOW = pygame.Surface((BUSH_SIZE, BUSH_SIZE), pygame.SRCALPHA)
+        for y in range(BUSH_SIZE):
+            for x in range(BUSH_SIZE):
+                if BUSH_SURF.get_at((x, y)).a > 0:
+                    BUSH_SHADOW.set_at((x, y), (10, 15, 25, 110))
+    else:
+        BUSH_SURF = None
+        BUSH_SHADOW = None
+
+    for var_name, filename in (("TREE_RAW", "tree.png"), ("TREE2_RAW", "tree2.png"), ("TREE3_RAW", "tree3.png")):
+        p = os.path.join(ASSET_DIR, filename)
+        if not os.path.exists(p):
+            p = os.path.join(ROOT_DIR, "assets", filename)
+        try:
+            if os.path.exists(p):
+                globals()[var_name] = pygame.image.load(p).convert_alpha()
+            else:
+                globals()[var_name] = _load(ASSET_DIR, os.path.splitext(filename)[0], alpha=True)
+        except (pygame.error, FileNotFoundError) as e:
+            globals()[var_name] = None
+
+    TREE_SURF, TREE_SHADOW = _make_tree_stroked_and_shadow(TREE_RAW)
+    TREE2_SURF, TREE2_SHADOW = _make_tree_stroked_and_shadow(TREE2_RAW)
+    TREE3_SURF, TREE3_SHADOW = _make_tree_stroked_and_shadow(TREE3_RAW)
+
+    for var_name, shad_name, filename in (("TREE_LOG_RAW", "TREE_LOG_SHADOW", "tree_log.png"), ("TREE3_LOG_RAW", "TREE3_LOG_SHADOW", "tree3_log.png")):
+        p = os.path.join(ASSET_DIR, filename)
+        if not os.path.exists(p):
+            p = os.path.join(ROOT_DIR, "assets", filename)
+        try:
+            if os.path.exists(p):
+                surf = pygame.image.load(p).convert_alpha()
+            else:
+                surf = _load(ASSET_DIR, os.path.splitext(filename)[0], alpha=True)
+            globals()[var_name] = surf
+            if surf is not None:
+                lw, lh = surf.get_size()
+                shad = pygame.Surface((lw, lh), pygame.SRCALPHA)
+                for y in range(lh):
+                    for x in range(lw):
+                        if surf.get_at((x, y)).a > 0:
+                            shad.set_at((x, y), (10, 15, 25, 110))
+                globals()[shad_name] = shad
+            else:
+                globals()[shad_name] = None
+        except (pygame.error, FileNotFoundError) as e:
+            globals()[var_name] = None
+            globals()[shad_name] = None
+
+    try:
+        cone_p = os.path.join(ASSET_DIR, "traffic_cone.png")
+        if not os.path.exists(cone_p):
+            cone_p = os.path.join(ROOT_DIR, "assets", "traffic_cone.png")
+        if os.path.exists(cone_p):
+            CONE_RAW = pygame.image.load(cone_p).convert_alpha()
+            bbox = CONE_RAW.get_bounding_rect()
+            cropped = CONE_RAW.subsurface(bbox).copy()
+            cw, ch = cropped.get_size()
+            scale = 24.0 / cw
+            target_w = 24
+            target_h = int(round(ch * scale))
+            CONE_SURF = _make_cone_stroked(pygame.transform.smoothscale(cropped, (target_w, target_h)))
+            sw_c = int(round(target_w * 0.92))
+            sh_c = int(round(target_w * 0.44))
+            CONE_SHADOW = pygame.Surface((sw_c + 4, sh_c + 4), pygame.SRCALPHA)
+            pygame.draw.ellipse(CONE_SHADOW, (10, 15, 25, 110), (2, 2, sw_c, sh_c))
+        else:
+            CONE_RAW = CONE_SURF = CONE_SHADOW = None
+    except (pygame.error, FileNotFoundError) as e:
+        CONE_RAW = CONE_SURF = CONE_SHADOW = None
+
+    DESTRUCT_RAW.clear()
+    DESTRUCT_SURF.clear()
+    DESTRUCT_SHADOW.clear()
+    dest_dir = os.path.join(ASSET_DIR, "destructibles")
+    if os.path.exists(dest_dir):
+        for name in ("barrel", "box", "vase"):
+            fp = os.path.join(dest_dir, f"{name}.png")
+            if os.path.exists(fp):
+                raw = pygame.image.load(fp).convert_alpha()
+                DESTRUCT_RAW[name] = raw
+                bw, bh = raw.get_size()
+                scale = 2.5 if name in ("barrel", "box") else 1.75
+                tw, th = int(round(bw * scale)), int(round(bh * scale))
+                scaled = pygame.transform.scale(raw, (tw, th))
+                DESTRUCT_SURF[name] = _make_cone_stroked(scaled)
+
+                sw = int(round(tw * 0.95))
+                sh = int(round(tw * 0.44))
+                shad = pygame.Surface((sw + 4, sh + 4), pygame.SRCALPHA)
+                pygame.draw.ellipse(shad, (10, 15, 25, 110), (2, 2, sw, sh))
+                DESTRUCT_SHADOW[name] = shad
+
+            # Load 4 break frames for FX_FRAMES
+            break_frames = []
+            for i in range(4):
+                bfp = os.path.join(dest_dir, f"{name}_break_{i}.png")
+                if os.path.exists(bfp):
+                    braw = pygame.image.load(bfp).convert_alpha()
+                    bbw, bbh = braw.get_size()
+                    scale = 2.5 if name in ("barrel", "box") else 1.75
+                    btw, bth = int(round(bbw * scale)), int(round(bbh * scale))
+                    break_frames.append(pygame.transform.scale(braw, (btw, bth)))
+            if break_frames:
+                FX_FRAMES[f"{name}_break"] = break_frames
+
+    _OIL_SPRITE_CACHE.clear()
+    _OIL_ZOOM_CACHE.clear()
+    OIL_TILES.clear()
+    try:
+        oil_p = os.path.join(ASSET_DIR, "oil_track.png")
+        if not os.path.exists(oil_p):
+            oil_p = os.path.join(ROOT_DIR, "assets", "oil_track.png")
+        if os.path.exists(oil_p):
+            raw = pygame.image.load(oil_p).convert_alpha()
+            w, h = raw.get_size()
+            clean = pygame.Surface((w, h), pygame.SRCALPHA)
+            dirt = (184, 111, 80)
+            for y in range(h):
+                for x in range(w):
+                    c = raw.get_at((x, y))
+                    if (c.r, c.g, c.b) != dirt:
+                        clean.set_at((x, y), (c.r, c.g, c.b, 255))
+            OIL_RAW = clean
+            OIL_TILES["top"] = clean.subsurface((16, 0, 16, 16)).copy()
+            OIL_TILES["bot"] = clean.subsurface((16, 32, 16, 16)).copy()
+            OIL_TILES["left"] = clean.subsurface((0, 16, 16, 16)).copy()
+            OIL_TILES["right"] = clean.subsurface((32, 16, 16, 16)).copy()
+            OIL_TILES["center"] = clean.subsurface((16, 16, 16, 16)).copy()
+        else:
+            OIL_RAW = None
+    except (pygame.error, FileNotFoundError) as e:
+        print("oil track sprite missing, fallback to None:", e)
+        OIL_RAW = None
 
     UI.clear()
     for name in UI_ICON_NAMES:
@@ -438,6 +797,48 @@ def _build_fence_shadows():
 def _load(folder, name, alpha):
     img = pygame.image.load(os.path.join(folder, name + ".png"))
     return img.convert_alpha() if alpha else img.convert()
+
+def _slice_sheet_cropped(sheet):
+    # a horizontal strip of square frames; crop all to one shared tight bbox (keeps them aligned)
+    fh = sheet.get_height()
+    nf = max(1, sheet.get_width() // fh)
+    frames = [sheet.subsurface((i * fh, 0, fh, fh)).copy() for i in range(nf)]
+    rects = [f.get_bounding_rect() for f in frames]
+    union = rects[0].unionall(rects[1:]) if len(rects) > 1 else rects[0]
+    if union.w > 0 and union.h > 0:
+        frames = [f.subsurface(union).copy() for f in frames]
+    return frames
+
+def _build_car_stack(sheet):
+    # a horizontal strip of square slices (bottom slice first) for a sprite-stacked car.
+    # Convert each slice to grayscale normalised to the brightest pixel so it can be tinted
+    # to any car colour by a plain RGB multiply while keeping its shading.
+    fh = sheet.get_height()
+    nf = max(1, sheet.get_width() // fh)
+    layers = [sheet.subsurface((i * fh, 0, fh, fh)).copy() for i in range(nf)]
+    lums, maxl = [], 1
+    for lay in layers:
+        m = []
+        for yy in range(lay.get_height()):
+            row = []
+            for xx in range(lay.get_width()):
+                r, g, b, a = lay.get_at((xx, yy))
+                val = max(r, g, b)              # brightness, so the body stays bright when tinted
+                row.append((val, a))
+                if a > 0:
+                    maxl = max(maxl, val)
+            m.append(row)
+        lums.append(m)
+    gray = []
+    for mi, lay in enumerate(layers):
+        g = pygame.Surface(lay.get_size(), pygame.SRCALPHA)
+        for yy in range(lay.get_height()):
+            for xx in range(lay.get_width()):
+                lum, a = lums[mi][yy][xx]
+                v = min(255, int(lum * 255 / maxl)) if a > 0 else 0
+                g.set_at((xx, yy), (v, v, v, a))
+        gray.append(g)
+    return gray
 
 def _make_inner_corner(qx, qy):
     # fallback if the inner-corner tiles are missing: a full tile whose (qx, qy) quarter is
@@ -940,6 +1341,210 @@ def _bake_finish(surf, ox, oy):
 
     surf.blit(band, band.get_rect(center=(round(wx - ox), round(wy - oy))))
 
+def _bake_bushes(surf, ox, oy):
+    # Generates green bush decorations, trees, and tree logs across the grass outfield and infield.
+    # Deterministic per MAP_SEED so all multiplayer clients share identical placement.
+    global BUSHES, TREES, TREE_LOGS
+    del BUSHES[:]
+    del TREES[:]
+    del TREE_LOGS[:]
+    tree_surfs = [t for t in (TREE_SURF, TREE2_SURF, TREE3_SURF) if t is not None]
+    tree_shads = [s for s in (TREE_SHADOW, TREE2_SHADOW, TREE3_SHADOW) if s is not None]
+    log_pairs = [p for p in ((TREE_LOG_RAW, TREE_LOG_SHADOW), (TREE3_LOG_RAW, TREE3_LOG_SHADOW)) if p[0] is not None]
+
+    if BUSH_SURF is None and not tree_surfs and not log_pairs:
+        return
+
+    ax0, ay0, ax1, ay1 = ARENA
+    gw, gh = (ax1 - ax0) + 2 * BAKE_PAD, (ay1 - ay0) + 2 * BAKE_PAD
+    gx0, gy0 = ox // TILE, oy // TILE
+    gx1, gy1 = (ox + gw) // TILE, (oy + gh) // TILE
+
+    fence_cells = {(f[0], f[1]) for f in FENCES}
+    rng = random.Random(MAP_SEED + 777)
+
+    eligible = set()
+    fence_outer_border = set()
+
+    for gy in range(gy0, gy1):
+        for gx in range(gx0, gx1):
+            if not is_dirt(gx, gy) and (gx, gy) not in fence_cells:
+                idx = (gy % GRID_N) * GRID_N + gx % GRID_N
+                if ROAD_NEAR[idx] == 1:
+                    continue  # preserve clean grass verge between road and fence
+                eligible.add((gx, gy))
+                if any((gx + ox_, gy + oy_) in fence_cells for ox_, oy_ in ((-1, 0), (1, 0), (0, -1), (0, 1))):
+                    fence_outer_border.add((gx, gy))
+
+    bushes = set()
+    trees = set()
+    tree_logs = set()
+
+    # 1. Fence-lining bushes (~28% of fence outer border cells)
+    for cell in sorted(fence_outer_border):
+        if rng.random() < 0.28:
+            bushes.add(cell)
+
+    # 2. Clusters of 1-4 bushes across the open infield and outfield grass (~7% of eligible)
+    num_field_bushes = int(len(eligible) * 0.07)
+    eligible_bush = list(eligible - bushes)
+    rng.shuffle(eligible_bush)
+    for center in eligible_bush:
+        if len(bushes) >= num_field_bushes:
+            break
+        if center in bushes:
+            continue
+        clump_size = rng.choices([1, 2, 3, 4], weights=[25, 35, 25, 15])[0]
+        cur_clump = [center]
+        bushes.add(center)
+        for _ in range(clump_size - 1):
+            base = rng.choice(cur_clump)
+            nbrs = [(base[0] + dx_, base[1] + dy_) for dx_, dy_ in ((-1, 0), (1, 0), (0, -1), (0, 1))]
+            valid_nbrs = [n for n in nbrs if n in eligible and n not in bushes]
+            if valid_nbrs:
+                pick = rng.choice(valid_nbrs)
+                bushes.add(pick)
+                cur_clump.append(pick)
+
+    # Safe tree check: ensure 48x64 tree sprite (3 tiles wide, 4 tiles high) and its shadow never
+    # touch, overlap, or cross into fence cells or track/verge areas.
+    def is_tree_safe(gx, gy):
+        for dy_ in (-3, -2, -1, 0, 1):
+            for dx_ in (-2, -1, 0, 1, 2):
+                cx_, cy_ = gx + dx_, gy + dy_
+                if (cx_, cy_) in fence_cells:
+                    return False
+                if is_dirt(cx_, cy_):
+                    return False
+                idx = (cy_ % GRID_N) * GRID_N + cx_ % GRID_N
+                if ROAD_NEAR[idx] < 2:
+                    return False
+        return True
+
+    # 3. Trees across outfield and open infield
+    # Trees have a 48x64 sprite. Require ROAD_NEAR >= 3 and is_tree_safe so canopy never overhangs fences or road.
+    if tree_surfs:
+        eligible_tree_cells = [
+            c for c in (eligible - bushes)
+            if ROAD_NEAR[(c[1] % GRID_N) * GRID_N + c[0] % GRID_N] >= 3
+            and is_tree_safe(c[0], c[1])
+        ]
+        rng.shuffle(eligible_tree_cells)
+        num_target_trees = max(10, int(len(eligible) * 0.028))
+        reserved_tree_area = set()
+        for center in eligible_tree_cells:
+            if len(trees) >= num_target_trees:
+                break
+            if center in reserved_tree_area or center in bushes:
+                continue
+            trees.add(center)
+            # Reserve surrounding cells to prevent overly dense overlapping
+            for rx in (-1, 0, 1):
+                for ry in (-1, 0, 1):
+                    reserved_tree_area.add((center[0] + rx, center[1] + ry))
+            # 35% chance to add a companion tree nearby for natural groves
+            if rng.random() < 0.35 and len(trees) < num_target_trees:
+                cand_grove = [
+                    (center[0] + dx_, center[1] + dy_)
+                    for dx_, dy_ in ((-1, -1), (1, -1), (-1, 1), (1, 1), (0, 1), (1, 0))
+                ]
+                valid_grove = [
+                    c for c in cand_grove
+                    if c in eligible and c not in bushes and c not in trees
+                    and ROAD_NEAR[(c[1] % GRID_N) * GRID_N + c[0] % GRID_N] >= 3
+                    and is_tree_safe(c[0], c[1])
+                ]
+                if valid_grove:
+                    comp = rng.choice(valid_grove)
+                    trees.add(comp)
+                    for rx in (-1, 0, 1):
+                        for ry in (-1, 0, 1):
+                            reserved_tree_area.add((comp[0] + rx, comp[1] + ry))
+
+    # 4. Tree logs (fallen stumps/logs) scattered naturally (~0.6% of eligible)
+    if log_pairs:
+        num_target_logs = max(5, int(len(eligible) * 0.006))
+        eligible_logs = [
+            c for c in (eligible - bushes - trees)
+            if ROAD_NEAR[(c[1] % GRID_N) * GRID_N + c[0] % GRID_N] >= 2
+        ]
+        rng.shuffle(eligible_logs)
+        for c in eligible_logs:
+            if len(tree_logs) >= num_target_logs:
+                break
+            tree_logs.add(c)
+
+    def _pick_tree_surf(gx, gy):
+        idx = (gx * 73856093 ^ gy * 19349663 ^ MAP_SEED) % len(tree_surfs)
+        return tree_surfs[idx]
+
+    def _pick_tree_shad(gx, gy):
+        if not tree_shads:
+            return None
+        idx = (gx * 73856093 ^ gy * 19349663 ^ MAP_SEED) % len(tree_shads)
+        return tree_shads[idx]
+
+    def _pick_log_pair(gx, gy):
+        idx = (gx * 374761393 ^ gy * 668265263 ^ MAP_SEED) % len(log_pairs)
+        return log_pairs[idx]
+
+    b_off = (BUSH_SIZE - TILE) // 2
+
+    # Draw directional shadows first (on grass)
+    if SHADER_SETTINGS.get("shadows", "ON") == "ON":
+        if BUSH_SHADOW is not None:
+            dx_b = round(SUN_DIR_X * (3.0 * BUSH_SIZE / 16.0))
+            dy_b = round(SUN_DIR_Y * (3.0 * BUSH_SIZE / 16.0))
+            for gx, gy in bushes:
+                px, py = gx * TILE - ox - b_off, gy * TILE - oy - b_off
+                surf.blit(BUSH_SHADOW, (px + dx_b, py + dy_b))
+
+        if log_pairs:
+            dx_l = round(SUN_DIR_X * 3.0)
+            dy_l = round(SUN_DIR_Y * 3.0)
+            for gx, gy in tree_logs:
+                _, l_shad = _pick_log_pair(gx, gy)
+                if l_shad is not None:
+                    px, py = gx * TILE - ox, gy * TILE - oy
+                    surf.blit(l_shad, (px + dx_l, py + dy_l))
+
+        if tree_shads:
+            for gx, gy in trees:
+                t_shad = _pick_tree_shad(gx, gy)
+                if t_shad is not None:
+                    px, py = gx * TILE - ox - 16, gy * TILE - oy - 48
+                    surf.blit(t_shad, (px, py))
+
+    # Draw sprites sorted by ground base Y (gy) so foreground objects naturally overlap background objects
+    # Bush base: gy * TILE + 16
+    # Log base: gy * TILE + 16
+    # Tree base: gy * TILE + 16
+    # kinds: 0 = bush, 1 = log, 2 = tree
+    items = [(gy, 0, gx, gy) for gx, gy in bushes] + \
+            [(gy, 1, gx, gy) for gx, gy in tree_logs] + \
+            [(gy, 2, gx, gy) for gx, gy in trees]
+
+    for _, kind, gx, gy in sorted(items, key=lambda it: (it[0], it[2])):
+        if kind == 0 and BUSH_SURF is not None:
+            px, py = gx * TILE - ox - b_off, gy * TILE - oy - b_off
+            surf.blit(BUSH_SURF, (px, py))
+        elif kind == 1 and log_pairs:
+            l_surf, _ = _pick_log_pair(gx, gy)
+            if l_surf is not None:
+                px, py = gx * TILE - ox, gy * TILE - oy
+                surf.blit(l_surf, (px, py))
+        elif kind == 2 and tree_surfs:
+            t_surf = _pick_tree_surf(gx, gy)
+            if t_surf is not None:
+                # Tree sprite is 50x66 with 1px white stroke padding. Trunk center at x=25, ground contact at y=64.
+                # Tile 16x16: px + 8 - 25 = px - 17; py + 15 - 64 = py - 49.
+                px, py = gx * TILE - ox - 17, gy * TILE - oy - 49
+                surf.blit(t_surf, (px, py))
+
+    BUSHES.extend(sorted(bushes, key=lambda b: (b[1], b[0])))
+    TREES.extend(sorted(trees, key=lambda t: (t[1], t[0])))
+    TREE_LOGS.extend(sorted(tree_logs, key=lambda l: (l[1], l[0])))
+
 def build_ground():
     # Bake the whole map into one image once, so each frame we just rotate the part around
     # the camera (rotating individual 16px tiles would leave seams). Needs a display surface.
@@ -974,6 +1579,7 @@ def build_ground():
                           (qx * half, qy * half, half, half))
 
     _bake_finish(surf, ox, oy)
+    _bake_bushes(surf, ox, oy)
 
     # fence shadows on the ground (direction-based projection baked before fence posts)
     for gx, gy, links in FENCES:
@@ -1078,6 +1684,15 @@ def new_map(seed):
     _build_minimap()
     spawn_boxes()
     del PARTICLES[:]
+    del FX[:]
+    del PROJECTILES[:]
+    del OIL[:]
+    del CONES[:]
+    del DESTRUCTIBLES[:]
+    rng_oil = random.Random(seed + 888)
+    drop_oil(rng_oil.randint(4, 7), rng=rng_oil)
+    spawn_traffic_cones(random.Random(seed + 999))
+    spawn_destructibles(random.Random(seed + 777))
 
 
 # =================================================================================================
@@ -1132,8 +1747,11 @@ class Car:
         self.was_drifting = False
         self.drift_charge = 0.0     # builds while drifting, spent as a mini-boost on release
         self.team = -1              # team index in team races, else -1
-        # bashing
+        # bashing & sabotage
         self.bash_cd = 0.0          # seconds until the next bash is ready
+        self.proj_cd = 0.0          # seconds until the next projectile can be fired
+        self.item = None            # held powerup item: None | "cone" | "oil"
+        self.sabotage_cd = 0.0      # cooldown between sabotages
         self.bash_time = 0.0        # > 0 while a bash/ram is active
         self.bash_kind = None
         self.bash_hits = set()      # who this bash has already hit (each victim once per bash)
@@ -1194,6 +1812,67 @@ class Car:
         self.bash_hits = set()
         play("bash")
         return True
+
+    def start_shoot(self):
+        # fire a projectile straight ahead from the nose
+        if self.proj_cd > 0 or self.reverse_time > 0 or self.dead:
+            return False
+        rad = math.radians(self.angle)
+        c, s = math.cos(rad), math.sin(rad)
+        spawn_projectile(self.x + c * CAR_HL, self.y + s * CAR_HL,
+                         c * PROJ_SPEED + self.vx, s * PROJ_SPEED + self.vy, self.uid)
+        self.proj_cd = PROJ_COOLDOWN
+        play("bash")
+        return True
+
+    def use_sabotage(self, action_name, backward=False):
+        if self.dead or self.reverse_time > 0:
+            return False
+        if action_name in ("cone", "throw_cone"):
+            if self.item == "cone":
+                self.item = None
+                return throw_traffic_cone(self, forward=True)
+            elif self.sabotage_cd <= 0:
+                self.sabotage_cd = 1.6
+                return throw_traffic_cone(self, forward=True)
+        elif action_name == "drop_cone":
+            if self.item == "cone":
+                self.item = None
+                return throw_traffic_cone(self, forward=False)
+            elif self.sabotage_cd <= 0:
+                self.sabotage_cd = 1.6
+                return throw_traffic_cone(self, forward=False)
+        elif action_name in ("oil", "spill_oil"):
+            if self.item == "oil":
+                self.item = None
+                return spill_oil(self)
+            elif self.sabotage_cd <= 0:
+                self.sabotage_cd = 1.8
+                return spill_oil(self)
+        elif action_name == "drop_item":
+            if self.item == "cone":
+                res = throw_traffic_cone(self, forward=False)
+                self.item = None
+                return res
+            elif self.item == "oil":
+                res = spill_oil(self)
+                self.item = None
+                return res
+            elif self.sabotage_cd <= 0:
+                self.sabotage_cd = 1.6
+                return throw_traffic_cone(self, forward=False)
+        elif action_name in ("item", "shoot"):
+            if self.item == "cone":
+                res = throw_traffic_cone(self, forward=not backward)
+                self.item = None
+                return res
+            elif self.item == "oil":
+                res = spill_oil(self)
+                self.item = None
+                return res
+            elif action_name == "shoot":
+                return self.start_shoot()
+        return False
 
     def integrate(self, h, steer_in):
         rad = math.radians(self.angle)
@@ -1274,6 +1953,8 @@ class Car:
     def post_frame(self, dt):
         self.race_t += dt
         self.bash_cd = max(0.0, self.bash_cd - dt)
+        self.proj_cd = max(0.0, self.proj_cd - dt)
+        self.sabotage_cd = max(0.0, self.sabotage_cd - dt)
         self.bash_time = max(0.0, self.bash_time - dt)
         self.boost_time = max(0.0, self.boost_time - dt)
         self.stagger = max(0.0, self.stagger - dt)
@@ -1589,7 +2270,14 @@ def step(dt, cars, controls):
         steer, action, drift = _ctrl(ctrl)
         car.prepare()
         car.drift = bool(drift) and not car.dead
-        if action:
+        if action in ("cone", "throw_cone", "drop_cone", "oil", "spill_oil", "item", "drop_item"):
+            car.use_sabotage(action)
+        elif action == "shoot":
+            if car.item:
+                car.use_sabotage("item")
+            else:
+                car.start_shoot()
+        elif action:
             car.start_bash(action)
     h = dt / PHYS_SUBSTEPS
     for _ in range(PHYS_SUBSTEPS):
@@ -1603,6 +2291,8 @@ def step(dt, cars, controls):
         car.post_frame(dt)
         _update_drift(car, dt)
         _spawn_car_fx(car)
+        if not car.dead:
+            _apply_oil(car)
         # race progress along the loop (forward and backward both count, so it's honest)
         s, _, car.track_idx = track_coords(car.x, car.y, car.track_idx)
         if car.track_s is not None:
@@ -1617,6 +2307,9 @@ def step(dt, cars, controls):
             # Celebratory star burst when crossing finish line
             for c_col in ((255, 230, 80), (80, 205, 255), (255, 120, 180)):
                 spawn_particles(car.x, car.y, 8, 110, c_col, 0.6)
+            # oil hazards appear on random laps (host/single-player owns the world)
+            if NET_ROLE != "client" and random.random() < OIL_SPAWN_CHANCE:
+                drop_oil(random.randint(2, 4))
     hit = max((c.impact for c in cars), default=0.0)   # one impact sound per frame, hardest hit
     if hit > 180:
         play("crash")
@@ -1624,7 +2317,11 @@ def step(dt, cars, controls):
         play("bump")
     _pack_pacing(cars)
     _update_boxes(dt, cars)
+    _update_cones(dt, cars)
+    _update_destructibles(dt, cars)
     _update_particles(dt)
+    _update_fx(dt)
+    _update_projectiles(dt, cars)
 
 def _update_drift(car, dt):
     speed = math.hypot(car.vx, car.vy)
@@ -1679,6 +2376,14 @@ def _spawn_car_fx(car):
         spk_cnt = min(int(car.impact / 12), 22)
         spk_col = (255, 245, 160) if random.random() < 0.5 else (255, 195, 60)
         spawn_particles(car.x, car.y, spk_cnt, 150, spk_col, 0.4)
+    # animated dust puffs kicked up when sliding / drifting / running on the grass
+    drifting = car.drift and speed > DRIFT_MIN_SPEED
+    if (drifting or car.slip_r > SKID_SLIP * 1.4 or (off > 0.3 and speed > 90)) \
+            and not car.dead and random.random() < 0.3:
+        side = random.choice((-1, 1))
+        dx = car.x - c * AXLE_REAR - s * side * WHEEL_Y
+        dy = car.y - s * AXLE_REAR + c * side * WHEEL_Y
+        spawn_fx(dx, dy, "dust1" if random.random() < 0.5 else "dust2", random.uniform(13, 19))
 
 def _pack_pacing(cars):
     # keep the bots around the player (or around each other with no player): a bot that's
@@ -1749,6 +2454,20 @@ def bot_control(bot, cars, dt):
                 closing = v_long - (target.vx * c + target.vy * s)
                 if closing > 20 and rnd.random() < aggr * AI_RAM_RATE * dt:
                     action = "ram"
+        # fire a projectile at a rival lined up ahead and out of bash range
+        if action is None and bot.proj_cd <= 0 and 40 < tfx < 300 and abs(tfy) < 24:
+            if rnd.random() < aggr * 1.6 * dt:
+                action = "shoot"
+        # sabotage rivals with cones or oil slicks
+        if action is None:
+            if bot.item == "cone" or (bot.sabotage_cd <= 0 and rnd.random() < aggr * 0.35 * dt):
+                if 35 < tfx < 240 and abs(tfy) < 28:
+                    action = "cone"
+                elif -140 < tfx < -20 and abs(tfy) < 32:
+                    action = "drop_cone"
+            elif bot.item == "oil" or (bot.sabotage_cd <= 0 and rnd.random() < aggr * 0.35 * dt):
+                if -150 < tfx < -15 and abs(tfy) < 35:
+                    action = "oil"
 
     if bot.off_f > 0.2 or bot.off_r > 0.2:
         lane_goal = 0.0                             # off the road: head straight back on
@@ -1793,7 +2512,7 @@ class Camera:
             target = lerp_angle(car.angle, math.degrees(math.atan2(car.vy, car.vx)), w)
         self.angle = lerp_angle(self.angle, target, t_rot)
         self.shake = min(1.0, max(0.0, self.shake - dt * 2.5) + car.impact / SHAKE_IMPULSE)
-        mag = SHAKE_PX * self.shake * self.shake
+        mag = SHAKE_PX * SHAKE_SCALE * self.shake * self.shake
         self.ox, self.oy = random.uniform(-mag, mag), random.uniform(-mag, mag)
 
     def to_screen(self, wx, wy):
@@ -1830,6 +2549,236 @@ def _update_particles(dt):
             keep.append(p)
     PARTICLES[:] = keep
 
+FX_FPS = 20.0       # animation speed of one-shot sprite effects
+MAX_FX = 200
+
+def spawn_fx(x, y, name, world_w, dur=None, rot=None):
+    frames = FX_FRAMES.get(name)
+    if not frames or len(FX) >= MAX_FX:
+        return
+    if dur is None:
+        dur = len(frames) / FX_FPS
+    if rot is None:
+        rot = random.uniform(0, 360)
+    FX.append([x % WORLD, y % WORLD, name, 0.0, dur, world_w, rot])
+
+def _update_fx(dt):
+    keep = [f for f in FX if (f.__setitem__(3, f[3] + dt) or f[3] < f[4])]
+    FX[:] = keep
+
+def _fx_frame(name, frame, w):
+    frames = FX_FRAMES.get(name)
+    if not frames:
+        return None
+    frame = max(0, min(len(frames) - 1, frame))
+    key = (name, frame, w)
+    img = _FX_CACHE.get(key)
+    if img is None:
+        src = frames[frame]
+        h = max(2, round(w * src.get_height() / src.get_width()))
+        img = pygame.transform.smoothscale(src, (w, h))
+        _FX_CACHE[key] = img
+    return img
+
+# ---- projectiles & oil slicks -------------------------------------------------------
+PROJECTILES = []    # [x, y, vx, vy, life, owner_uid]
+OIL = []            # [x, y, r] oil slicks on the track
+
+def spawn_projectile(x, y, vx, vy, owner_uid):
+    PROJECTILES.append([x % WORLD, y % WORLD, vx, vy, PROJ_LIFE, owner_uid])
+
+def _update_projectiles(dt, cars):
+    keep = []
+    for p in PROJECTILES:
+        p[4] -= dt
+        if p[4] <= 0:
+            continue
+        p[0] = (p[0] + p[2] * dt) % WORLD
+        p[1] = (p[1] + p[3] * dt) % WORLD
+        hit = False
+        for car in cars:
+            if car.uid == p[5] or car.dead:
+                continue
+            dx, dy = wrap_delta(p[0], car.x), wrap_delta(p[1], car.y)
+            if dx * dx + dy * dy <= (CAR_BOUND + PROJ_R) ** 2:
+                sp = math.hypot(p[2], p[3]) or 1.0
+                car.vx += p[2] / sp * PROJ_KNOCK
+                car.vy += p[3] / sp * PROJ_KNOCK
+                car.omega += random.uniform(-1.5, 1.5)
+                car.stagger = STAGGER_TIME
+                car.flash = 0.25
+                car.hit_flash = HIT_FLASH
+                car.last_hit_by = p[5]
+                car.grudge, car.grudge_time = p[5], 5.0
+                car.impact = max(car.impact, PROJ_KNOCK * 1.4)
+                spawn_particles(p[0], p[1], 16, 150, (255, 210, 90), 0.4)
+                spawn_fx(p[0], p[1], "fire1", 20, dur=0.3)
+                hit = True
+                break
+        if not hit:
+            keep.append(p)
+    PROJECTILES[:] = keep
+
+def make_oil_track_sprite(width, length):
+    # Generates a pixel art oil track sprite of requested width and length from the 48x48 oil_track_tiles.
+    # Sprite orientation is vertical (height = length, width = width), with tapered caps and organic side lobes.
+    if not OIL_TILES:
+        surf = pygame.Surface((width, length), pygame.SRCALPHA)
+        pygame.draw.ellipse(surf, (27, 26, 40, 230), (0, 0, width, length))
+        return surf
+
+    surf = pygame.Surface((width, length), pygame.SRCALPHA)
+    cap_h = min(16, max(4, length // 3))
+    mid_h = max(1, length - 2 * cap_h)
+
+    if width <= 20:
+        # Narrow streak / single line of oil
+        top_s = pygame.transform.scale(OIL_TILES["top"], (width, cap_h))
+        bot_s = pygame.transform.scale(OIL_TILES["bot"], (width, cap_h))
+        mid_s = pygame.transform.scale(OIL_TILES["center"], (width, mid_h))
+        surf.blit(top_s, (0, 0))
+        surf.blit(mid_s, (0, cap_h))
+        surf.blit(bot_s, (0, length - cap_h))
+    else:
+        # Multi-column / 9-slice oil track with side lobes and center fill
+        cap_w = min(16, max(4, width // 3))
+        mid_w = max(1, width - 2 * cap_w)
+        top_s = pygame.transform.scale(OIL_TILES["top"], (mid_w, cap_h))
+        bot_s = pygame.transform.scale(OIL_TILES["bot"], (mid_w, cap_h))
+        surf.blit(top_s, (cap_w, 0))
+        surf.blit(bot_s, (cap_w, length - cap_h))
+        left_s = pygame.transform.scale(OIL_TILES["left"], (cap_w, mid_h))
+        right_s = pygame.transform.scale(OIL_TILES["right"], (cap_w, mid_h))
+        surf.blit(left_s, (0, cap_h))
+        surf.blit(right_s, (width - cap_w, cap_h))
+        center_s = pygame.transform.scale(OIL_TILES["center"], (mid_w, mid_h))
+        surf.blit(center_s, (cap_w, cap_h))
+
+    return surf
+
+def _get_oil_sprite(width, length):
+    key = (width, length)
+    if key not in _OIL_SPRITE_CACHE:
+        _OIL_SPRITE_CACHE[key] = make_oil_track_sprite(width, length)
+    return _OIL_SPRITE_CACHE[key]
+
+def _get_oil_zoom_sprite(width, length, zw, zl):
+    key = (width, length, zw, zl)
+    if key not in _OIL_ZOOM_CACHE:
+        base = _get_oil_sprite(width, length)
+        _OIL_ZOOM_CACHE[key] = pygame.transform.scale(base, (zw, zl))
+    return _OIL_ZOOM_CACHE[key]
+
+def drop_oil(n=1, rng=None):
+    if ROAD_LEN <= 1.0:
+        return
+    r = rng if rng is not None else random
+    for _ in range(n):
+        s = r.uniform(0, ROAD_LEN)
+        lat = r.uniform(-1, 1) * ROAD_WIDTH * 0.38
+        x, y, heading = road_pose(s, lat)
+
+        preset = r.choices(["narrow", "medium", "wide", "large_pool"], weights=[25, 30, 15, 30])[0]
+        if preset == "narrow":
+            w = r.choice([14, 16, 18, 20])
+            l = r.choice([48, 64, 80, 96])
+        elif preset == "medium":
+            w = r.choice([24, 28, 32, 36])
+            l = r.choice([40, 52, 68, 84, 100])
+        elif preset == "wide":
+            w = r.choice([40, 44, 48])
+            l = r.choice([48, 64, 80, 96, 112])
+        else:  # large_pool: substantial wide oil body / pool instead of single straight line
+            w = r.choice([56, 64, 72, 80, 88])
+            l = r.choice([56, 68, 76, 88, 96])
+
+        angle = heading + r.uniform(-15.0, 15.0)
+        max_r = max(l, w) * 0.5
+        OIL.append([x % WORLD, y % WORLD, l, w, angle, max_r])
+
+    if len(OIL) > OIL_MAX:
+        del OIL[:len(OIL) - OIL_MAX]
+
+def _apply_oil(car):
+    # a kart whose centre is on an oil track loses grip and fishtails
+    for item in OIL:
+        ox, oy = item[0], item[1]
+        length = item[2]
+        width = item[3] if len(item) > 3 else length
+        angle = item[4] if len(item) > 4 else 0.0
+
+        max_r = max(length, width) * 0.55
+        dx, dy = wrap_delta(ox, car.x), wrap_delta(oy, car.y)
+        if dx * dx + dy * dy > max_r * max_r:
+            continue
+
+        rad = math.radians(angle)
+        cos_a, sin_a = math.cos(rad), math.sin(rad)
+        lx = dx * cos_a + dy * sin_a
+        ly = -dx * sin_a + dy * cos_a
+        hl = max(1.0, length * 0.5)
+        hw = max(1.0, width * 0.5)
+        if (lx / hl) ** 2 + (ly / hw) ** 2 <= 1.0:
+            car.stagger = max(car.stagger, 0.18)
+            car.omega += random.uniform(-0.6, 0.6)
+            return
+
+def draw_oil(screen, cam):
+    for item in OIL:
+        ox, oy = item[0], item[1]
+        length = item[2]
+        width = item[3] if len(item) > 3 else length
+        angle = item[4] if len(item) > 4 else 0.0
+
+        sx0, sy0 = cam.to_screen(ox, oy)
+        bound = int(max(length, width) * ZOOM) + 16
+        if sx0 < -bound or sx0 > W + bound or sy0 < -bound or sy0 > H + bound:
+            continue
+
+        zw = max(2, round(width * ZOOM))
+        zl = max(2, round(length * ZOOM))
+        zoom_spr = _get_oil_zoom_sprite(width, length, zw, zl)
+        if zoom_spr is None:
+            continue
+
+        rad = math.radians(angle)
+        sxf, syf = cam.to_screen(ox + math.cos(rad) * 10, oy + math.sin(rad) * 10)
+        measured_rot = -math.degrees(math.atan2(syf - sy0, sxf - sx0))
+        rot_img = pygame.transform.rotate(zoom_spr, measured_rot + 90)
+        screen.blit(rot_img, rot_img.get_rect(center=(round(sx0), round(sy0))))
+
+def draw_projectiles(screen, cam):
+    for x, y, vx, vy, life, owner in PROJECTILES:
+        sx, sy = cam.to_screen(x, y)
+        if sx < -20 or sx > W + 20 or sy < -20 or sy > H + 20:
+            continue
+        r = max(2, int(PROJ_R * ZOOM))
+        pygame.draw.circle(screen, (255, 235, 150), (int(sx), int(sy)), r + 2)
+        pygame.draw.circle(screen, (255, 120, 40), (int(sx), int(sy)), r)
+        pygame.draw.circle(screen, (255, 255, 255), (int(sx), int(sy)), max(1, r // 2))
+
+def draw_fx(screen, cam):
+    for x, y, name, age, dur, world_w, rot in FX:
+        frames = FX_FRAMES.get(name)
+        if not frames:
+            continue
+        sx, sy = cam.to_screen(x, y)
+        if sx < -60 or sx > W + 60 or sy < -60 or sy > H + 60:
+            continue
+        nf = len(frames)
+        fi = min(nf - 1, int(age / dur * nf))
+        w = max(4, int(world_w * ZOOM))
+        img = _fx_frame(name, fi, w)
+        if img is None:
+            continue
+        if rot:
+            img = pygame.transform.rotate(img, rot)
+        frac = age / dur
+        if frac > 0.72:                 # fade the last stretch so it dissolves rather than pops off
+            img = img.copy()
+            img.set_alpha(int(255 * max(0.0, 1 - (frac - 0.72) / 0.28)))
+        screen.blit(img, img.get_rect(center=(sx, sy)))
+
 # ---- mystery boxes -----------------------------------------------------------------
 BOXES = []          # [dict(x, y, phase, timer)]  timer > 0 -> taken, counting down to respawn
 NET_ROLE = "off"    # off (single-player) | host | client -- who decides box pickups
@@ -1857,7 +2806,19 @@ def give_powerup(car, kind):
         car.hearts = min(HEART_COUNT, car.hearts + 1)
     elif kind == "bash":
         car.bash_cd = 0.0               # instant bash recharge
+    elif kind == "cone":
+        car.item = "cone"
+    elif kind == "oil":
+        car.item = "oil"
     car.flash = max(car.flash, 0.25)
+    # exhaust pumps fire on pickup: a short burst of flame puffs out the back
+    rad = math.radians(car.angle)
+    c, s = math.cos(rad), math.sin(rad)
+    for _ in range(3):
+        ex = car.x - c * CAR_HL + random.uniform(-5, 5)
+        ey = car.y - s * CAR_HL + random.uniform(-5, 5)
+        spawn_fx(ex, ey, "fire1" if random.random() < 0.5 else "fire2",
+                 random.uniform(18, 26), dur=0.38)
     play("powerup2" if kind == "heart" else "powerup")
     return kind
 
@@ -1892,6 +2853,332 @@ def apply_box_event(idx, kind):
         b["timer"] = BOX_RESPAWN
         spawn_particles(b["x"], b["y"], 24, 140, BOX_COLORS.get("mystery", (45, 145, 255)), 0.65)
 
+def spawn_traffic_cones(rng=None):
+    del CONES[:]
+    if ROAD_LEN <= 1.0:
+        return
+    r = rng if rng is not None else random
+    # Place cones along road borders / corner apexes / chicanes
+    num_clusters = r.randint(6, 10)
+    for _ in range(num_clusters):
+        s = r.uniform(0, ROAD_LEN)
+        side = r.choice([-1.0, 1.0])
+        cluster_len = r.choice([2, 3])
+        for step_i in range(cluster_len):
+            cs = (s + step_i * 20.0) % ROAD_LEN
+            lat = side * ROAD_WIDTH * 0.44
+            cx, cy, _ = road_pose(cs, lat)
+            CONES.append({
+                "x": cx % WORLD,
+                "y": cy % WORLD,
+                "base_x": cx % WORLD,
+                "base_y": cy % WORLD,
+                "vx": 0.0,
+                "vy": 0.0,
+                "angle": 0.0,
+                "vrot": 0.0,
+                "knocked": False,
+                "timer": 0.0,
+            })
+
+def _update_cones(dt, cars):
+    if not CONES:
+        return
+    r_cone = 13.0
+    min_dist = r_cone + CAR_HW
+    for c in CONES:
+        if c["knocked"]:
+            c["x"] = (c["x"] + c["vx"] * dt) % WORLD
+            c["y"] = (c["y"] + c["vy"] * dt) % WORLD
+            c["angle"] += c["vrot"] * dt
+            c["vx"] *= 0.90
+            c["vy"] *= 0.90
+            c["vrot"] *= 0.88
+            c["timer"] -= dt
+            spd_sq = c["vx"] * c["vx"] + c["vy"] * c["vy"]
+            if spd_sq > 50.0 * 50.0:
+                for car in cars:
+                    if c.get("owner_uid") == car.uid and c["timer"] > 5.5:
+                        continue
+                    dx = wrap_delta(c["x"], car.x)
+                    dy = wrap_delta(c["y"], car.y)
+                    if dx * dx + dy * dy < (r_cone + CAR_HW) ** 2:
+                        sp = math.sqrt(spd_sq)
+                        car.vx += (c["vx"] / sp) * 150.0
+                        car.vy += (c["vy"] / sp) * 150.0
+                        car.omega += random.choice([-1, 1]) * 1.8
+                        car.stagger = max(car.stagger, 0.35)
+                        car.impact = max(car.impact, 110.0)
+                        spawn_particles(c["x"], c["y"], 12, 100, (255, 140, 30), 0.4)
+                        play("crash")
+                        c["vx"] *= -0.3
+                        c["vy"] *= -0.3
+                        break
+            if c["timer"] <= 0.0:
+                if c.get("thrown", False):
+                    c["dead"] = True
+                else:
+                    c["x"], c["y"] = c["base_x"], c["base_y"]
+                    c["vx"] = c["vy"] = c["angle"] = c["vrot"] = 0.0
+                    c["knocked"] = False
+        else:
+            for car in cars:
+                dx = wrap_delta(c["x"], car.x)
+                dy = wrap_delta(c["y"], car.y)
+                dist_sq = dx * dx + dy * dy
+                if dist_sq < min_dist * min_dist:
+                    dist = max(0.001, math.sqrt(dist_sq))
+                    nx, ny = dx / dist, dy / dist
+                    pen = min_dist - dist
+                    # Positional push: physically separate car and cone
+                    car.x = (car.x + nx * pen * 0.45) % WORLD
+                    car.y = (car.y + ny * pen * 0.45) % WORLD
+                    c["x"] = (c["x"] - nx * pen * 0.55) % WORLD
+                    c["y"] = (c["y"] - ny * pen * 0.55) % WORLD
+
+                    # Velocity response along collision normal
+                    rel_vx = car.vx - c["vx"]
+                    rel_vy = car.vy - c["vy"]
+                    vn = rel_vx * nx + rel_vy * ny
+                    if vn < 0:
+                        j = -(1.0 + 0.55) * vn
+                        # Push back and deflect car
+                        car.vx += nx * (j * 0.22)
+                        car.vy += ny * (j * 0.22)
+                        car.omega += (-dy * nx + dx * ny) * 0.002
+                        car.impact = max(car.impact, 85.0)
+                        # Knock cone away with high momentum
+                        c["vx"] -= nx * (j * 1.35) + random.uniform(-25, 25)
+                        c["vy"] -= ny * (j * 1.35) + random.uniform(-25, 25)
+                        c["vrot"] = random.choice([-1, 1]) * random.uniform(360, 720)
+                        c["knocked"] = True
+                        c["timer"] = 6.0
+                        spawn_particles(c["x"], c["y"], 8, 90, (255, 140, 30), 0.35)
+                        play("bump")
+                    break
+    if any(c.get("dead") for c in CONES):
+        CONES[:] = [c for c in CONES if not c.get("dead", False)]
+
+def throw_traffic_cone(car, forward=True):
+    rad = math.radians(car.angle)
+    c, s = math.cos(rad), math.sin(rad)
+    if forward:
+        cx = (car.x + c * (CAR_HL + 16.0)) % WORLD
+        cy = (car.y + s * (CAR_HL + 16.0)) % WORLD
+        car_spd = math.hypot(car.vx, car.vy)
+        cone_spd = car_spd + 420.0
+        cvx = c * cone_spd + car.vx * 0.2
+        cvy = s * cone_spd + car.vy * 0.2
+        CONES.append({
+            "x": cx,
+            "y": cy,
+            "base_x": cx,
+            "base_y": cy,
+            "vx": cvx,
+            "vy": cvy,
+            "angle": car.angle,
+            "vrot": random.choice([-1, 1]) * random.uniform(500, 900),
+            "knocked": True,
+            "timer": 6.0,
+            "thrown": True,
+            "owner_uid": car.uid,
+        })
+        spawn_particles(cx, cy, 10, 80, (255, 140, 30), 0.4)
+        play("bash")
+    else:
+        cx = (car.x - c * (CAR_HL + 16.0)) % WORLD
+        cy = (car.y - s * (CAR_HL + 16.0)) % WORLD
+        CONES.append({
+            "x": cx,
+            "y": cy,
+            "base_x": cx,
+            "base_y": cy,
+            "vx": 0.0,
+            "vy": 0.0,
+            "angle": 0.0,
+            "vrot": 0.0,
+            "knocked": False,
+            "timer": 15.0,
+            "thrown": True,
+            "owner_uid": car.uid,
+        })
+        spawn_particles(cx, cy, 8, 60, (255, 140, 30), 0.3)
+        play("bump")
+    return True
+
+def spill_oil(car):
+    rad = math.radians(car.angle)
+    c, s = math.cos(rad), math.sin(rad)
+    ox = (car.x - c * (CAR_HL + 16.0)) % WORLD
+    oy = (car.y - s * (CAR_HL + 16.0)) % WORLD
+    w = random.choice([28, 36, 44])
+    l = random.choice([48, 64, 80])
+    angle = car.angle + random.uniform(-10.0, 10.0)
+    max_r = max(l, w) * 0.5
+    OIL.append([ox, oy, l, w, angle, max_r])
+    if len(OIL) > OIL_MAX + 12:
+        del OIL[:len(OIL) - (OIL_MAX + 12)]
+    spawn_particles(ox, oy, 12, 50, (35, 35, 40), 0.5)
+    play("bump")
+    return True
+
+def spawn_destructibles(rng=None):
+    del DESTRUCTIBLES[:]
+    if ROAD_LEN <= 1.0 or not DESTRUCT_SURF:
+        return
+    r = rng if rng is not None else random
+    kinds = [k for k in ("barrel", "box", "vase") if k in DESTRUCT_SURF]
+    if not kinds:
+        return
+    num_clusters = r.randint(8, 14)
+    for _ in range(num_clusters):
+        s = r.uniform(0, ROAD_LEN)
+        side = r.choice([-1.0, 1.0])
+        cluster_len = r.choice([2, 3, 4])
+        cluster_kind = r.choice(kinds)
+        spacing = r.uniform(18.0, 26.0)
+        for step_i in range(cluster_len):
+            cs = (s + step_i * spacing) % ROAD_LEN
+            lat = side * ROAD_WIDTH * 0.44
+            dx_off = r.uniform(-3.0, 3.0)
+            dy_off = r.uniform(-3.0, 3.0)
+            cx, cy, _ = road_pose(cs, lat)
+            pos_x = (cx + dx_off) % WORLD
+            pos_y = (cy + dy_off) % WORLD
+            too_close = False
+            for c in CONES:
+                dx = wrap_delta(pos_x, c["x"])
+                dy = wrap_delta(pos_y, c["y"])
+                if dx * dx + dy * dy < 30.0 * 30.0:
+                    too_close = True
+                    break
+            if too_close:
+                continue
+            k = cluster_kind if r.random() < 0.65 else r.choice(kinds)
+            DESTRUCTIBLES.append({
+                "x": pos_x,
+                "y": pos_y,
+                "type": k,
+                "destroyed": False,
+                "wobble": 0.0,
+                "respawn_timer": 0.0,
+            })
+
+def _update_destructibles(dt, cars):
+    if not DESTRUCTIBLES or not DESTRUCT_SURF:
+        return
+    for d in DESTRUCTIBLES:
+        if d["destroyed"]:
+            d["respawn_timer"] -= dt
+            if d["respawn_timer"] <= 0.0:
+                d["destroyed"] = False
+                d["wobble"] = 0.0
+            continue
+
+        if d["wobble"] > 0:
+            d["wobble"] = max(0.0, d["wobble"] - dt)
+
+        r_prop = 21.0 if d["type"] in ("barrel", "box") else 14.0
+        min_car_dist = r_prop + CAR_HW
+
+        # 1. Car collisions
+        for car in cars:
+            dx = wrap_delta(d["x"], car.x)
+            dy = wrap_delta(d["y"], car.y)
+            dist_sq = dx * dx + dy * dy
+            if dist_sq < min_car_dist * min_car_dist:
+                dist = max(0.001, math.sqrt(dist_sq))
+                car_spd = math.hypot(car.vx, car.vy)
+                if car_spd > 60.0 or car.bash_time > 0 or car.boost_time > 0:
+                    d["destroyed"] = True
+                    d["respawn_timer"] = 12.0
+                    fx_w = 64 if d["type"] in ("barrel", "box") else 42
+                    spawn_fx(d["x"], d["y"], f"{d['type']}_break", fx_w, dur=0.35, rot=0.0)
+                    part_col = (180, 140, 90) if d["type"] == "box" else ((150, 95, 60) if d["type"] == "barrel" else (210, 130, 90))
+                    spawn_particles(d["x"], d["y"], 18, 140, part_col, 0.5)
+                    play("crash")
+                    car.vx *= 0.88
+                    car.vy *= 0.88
+                    car.impact = max(car.impact, 95.0)
+                    break
+                else:
+                    nx, ny = dx / dist, dy / dist
+                    pen = min_car_dist - dist
+                    car.x = (car.x + nx * pen * 0.5) % WORLD
+                    car.y = (car.y + ny * pen * 0.5) % WORLD
+                    car.vx *= 0.55
+                    car.vy *= 0.55
+                    d["wobble"] = 0.35
+                    play("bump")
+                    break
+
+        if d["destroyed"]:
+            continue
+
+        # 2. Knocked cone collisions
+        for c in CONES:
+            if c["knocked"] and (c["vx"] * c["vx"] + c["vy"] * c["vy"] > 40.0 * 40.0):
+                dx = wrap_delta(d["x"], c["x"])
+                dy = wrap_delta(d["y"], c["y"])
+                if dx * dx + dy * dy < (r_prop + 14.0) ** 2:
+                    d["destroyed"] = True
+                    d["respawn_timer"] = 12.0
+                    fx_w = 64 if d["type"] in ("barrel", "box") else 42
+                    spawn_fx(d["x"], d["y"], f"{d['type']}_break", fx_w, dur=0.35, rot=0.0)
+                    part_col = (180, 140, 90) if d["type"] == "box" else ((150, 95, 60) if d["type"] == "barrel" else (210, 130, 90))
+                    spawn_particles(d["x"], d["y"], 18, 140, part_col, 0.5)
+                    play("crash")
+                    c["vx"] *= -0.5
+                    c["vy"] *= -0.5
+                    break
+
+        if d["destroyed"]:
+            continue
+
+        # 3. Projectile collisions
+        for p in PROJECTILES:
+            if p[4] <= 0:
+                continue
+            dx = wrap_delta(d["x"], p[0])
+            dy = wrap_delta(d["y"], p[1])
+            if dx * dx + dy * dy < (r_prop + PROJ_R) ** 2:
+                d["destroyed"] = True
+                d["respawn_timer"] = 12.0
+                fx_w = 64 if d["type"] in ("barrel", "box") else 42
+                spawn_fx(d["x"], d["y"], f"{d['type']}_break", fx_w, dur=0.35, rot=0.0)
+                part_col = (180, 140, 90) if d["type"] == "box" else ((150, 95, 60) if d["type"] == "barrel" else (210, 130, 90))
+                spawn_particles(d["x"], d["y"], 18, 140, part_col, 0.5)
+                play("crash")
+                p[4] = 0.0
+                break
+
+def draw_destructibles(screen, cam):
+    if not DESTRUCTIBLES or not DESTRUCT_SURF:
+        return
+    shadow_on = SHADER_SETTINGS.get("shadows", "ON") == "ON"
+    dx_d = round(SUN_DIR_X * 8)
+    dy_d = round(SUN_DIR_Y * 8)
+    for d in DESTRUCTIBLES:
+        if d["destroyed"]:
+            continue
+        t = d["type"]
+        surf = DESTRUCT_SURF.get(t)
+        if surf is None:
+            continue
+        dw, dh = surf.get_size()
+        sx, sy = cam.to_screen(d["x"], d["y"])
+        if not (-50 <= sx <= W + 50 and -50 <= sy <= H + 50):
+            continue
+        shad = DESTRUCT_SHADOW.get(t)
+        if shadow_on and shad is not None:
+            ssw, ssh = shad.get_size()
+            screen.blit(shad, (round(sx - ssw // 2 + dx_d), round(sy - ssh // 2 + dy_d - 1)))
+
+        wox = 0
+        if d.get("wobble", 0.0) > 0.0:
+            wox = math.sin(d["wobble"] * 30.0) * 3.0
+        screen.blit(surf, (round(sx - dw // 2 + wox), round(sy - dh)))
+
 def lap_of(car):
     # laps completed since the start line; progress is px driven along the loop
     if ROAD_LEN <= 1.0:
@@ -1925,6 +3212,18 @@ def apply_net_state(car, d, t=1.0):
 # drawing
 # =================================================================================================
 ZOOM = 1.68         # camera zoom; >1 shows less of the world, bigger karts
+ZOOM_MIN = 1.2      # slider ends: more of the track in view ...
+ZOOM_MAX = 2.4      # ... to tight and zoomed on the kart
+
+def set_zoom(v):
+    # slider 0..1 -> ZOOM; rebuilds the pre-scaled ground so draw_ground stays fast
+    global ZOOM
+    ZOOM = ZOOM_MIN + (ZOOM_MAX - ZOOM_MIN) * max(0.0, min(1.0, v))
+    if GROUND_SURF is not None:
+        _build_zoomed_ground()
+
+def zoom_frac():
+    return (ZOOM - ZOOM_MIN) / (ZOOM_MAX - ZOOM_MIN)
 # chunk is in *zoomed-ground* pixels and sized to still cover the screen once rotated. Using a
 # ground that's pre-scaled by ZOOM lets us rotate() each frame (fast) instead of rotozoom() (slow).
 _CHUNK = int(math.hypot(W, H)) + 6 * TILE
@@ -2091,7 +3390,68 @@ def draw_car_shadow(screen, car, cam):
 
     screen.blit(_CAR_SHADOW_SURF, (min_x, min_y), (0, 0, sw, sh))
 
+CAR_SPRITE_W = 34       # on-screen width of the 16px car slice in world px (before ZOOM)
+CAR_STACK_LIFT = 1.15   # px each slice is lifted above the one below (before ZOOM)
+
+def _car_layers(color):
+    # scaled + colour-tinted slices for this car colour and the current zoom, cached
+    if CAR_STACK is None:
+        return None
+    w = max(6, int(CAR_SPRITE_W * ZOOM))
+    key = (color, w)
+    tint = _CARTINT_CACHE.get(key)
+    if tint is None:
+        scaled = _CARSCALE_CACHE.get(w)
+        if scaled is None:
+            scaled = [pygame.transform.scale(l, (w, w)) for l in CAR_STACK]
+            _CARSCALE_CACHE[w] = scaled
+        tint = []
+        for l in scaled:
+            t = l.copy()
+            t.fill(tuple(color) + (255,), special_flags=pygame.BLEND_RGB_MULT)
+            tint.append(t)
+        _CARTINT_CACHE[key] = tint
+    return tint
+
 def draw_car(screen, car, cam):
+    if CAR_STACK is None:
+        _draw_car_vector(screen, car, cam)
+        return
+    rad = math.radians(car.angle)
+    c, s = math.cos(rad), math.sin(rad)
+    sx0, sy0 = cam.to_screen(car.x, car.y)
+    if car.dead:
+        tint = (150, 150, 155)
+    elif car.bash_time > 0:
+        tint = (255, 255, 255)                  # bashing -> flash white
+    elif car.hit_flash > 0:
+        tint = (255, 70, 70)                    # got bashed / hit a wall -> red
+    else:
+        tint = tuple(car.color)
+    layers = _car_layers(tint)
+    # forward direction on screen (accounts for the rotating camera)
+    sxf, syf = cam.to_screen(car.x + c, car.y + s)
+    rot = -math.degrees(math.atan2(syf - sy0, sxf - sx0))
+    lift = max(1, int(round(CAR_STACK_LIFT * ZOOM)))
+    n = len(layers)
+    rotated = [pygame.transform.rotate(lay, rot) for lay in layers]
+    rw, rh = rotated[0].get_size()
+    stroke = max(1, int(round(1.4 * ZOOM)))
+    pad = stroke + 1
+    # composite the whole stack onto one surface so the outline wraps the full silhouette
+    temp = pygame.Surface((rw + 2 * pad, rh + (n - 1) * lift + 2 * pad), pygame.SRCALPHA)
+    for k, img in enumerate(rotated):
+        temp.blit(img, (pad, pad + (n - 1 - k) * lift))
+    ox = int(sx0 - temp.get_width() / 2)
+    oy = int(sy0 - pad - rh / 2 - (n - 1) * lift)
+    mask = temp.copy()
+    mask.fill((255, 255, 255, 0), special_flags=pygame.BLEND_RGB_MAX)   # white, keep alpha
+    for dx, dy in ((-stroke, 0), (stroke, 0), (0, -stroke), (0, stroke),
+                   (-stroke, -stroke), (stroke, -stroke), (-stroke, stroke), (stroke, stroke)):
+        screen.blit(mask, (ox + dx, oy + dy))
+    screen.blit(temp, (ox, oy))
+
+def _draw_car_vector(screen, car, cam):
     rad = math.radians(car.angle)
     c, s = math.cos(rad), math.sin(rad)
 
@@ -2177,15 +3537,15 @@ def draw_box(screen, box, cam):
     r = BOX_SIZE // 2
     cy = sy + bob
     # ground shadow stays put while the box bobs, so it reads as floating
-    shadow = pygame.Surface((BOX_SIZE + 4, 10), pygame.SRCALPHA)
+    shadow = pygame.Surface((BOX_SIZE + 6, 12), pygame.SRCALPHA)
     pygame.draw.ellipse(shadow, (0, 0, 0, 110), shadow.get_rect())
-    screen.blit(shadow, (int(sx - r - 2), int(sy + r + 3)))
+    screen.blit(shadow, (int(sx - r - 3), int(sy + r + 4)))
     rect = pygame.Rect(int(sx - r), int(cy - r), BOX_SIZE, BOX_SIZE)
     kind = box.get("kind", "mystery")
     box_col = BOX_COLORS.get(kind, (45, 145, 255))
-    pygame.draw.rect(screen, box_col, rect, border_radius=6)
-    pygame.draw.rect(screen, (255, 255, 255), rect, 2, border_radius=6)
-    q = get_font(26).render(BOX_LETTER.get(kind, "?"), True, (255, 255, 255))
+    pygame.draw.rect(screen, box_col, rect, border_radius=8)
+    pygame.draw.rect(screen, (255, 255, 255), rect, 2, border_radius=8)
+    q = get_font(30).render(BOX_LETTER.get(kind, "?"), True, (255, 255, 255))
     screen.blit(q, q.get_rect(center=rect.center))
 
 def draw_boxes(screen, cam):
@@ -2193,39 +3553,224 @@ def draw_boxes(screen, cam):
         if box["timer"] <= 0:
             draw_box(screen, box, cam)
 
+def draw_cones(screen, cam):
+    if CONE_SURF is None or not CONES:
+        return
+    cw, ch = CONE_SURF.get_size()
+    shadow_on = SHADER_SETTINGS.get("shadows", "ON") == "ON"
+    dx_c = round(SUN_DIR_X * 9)
+    dy_c = round(SUN_DIR_Y * 9)
+    csw, csh = CONE_SHADOW.get_size() if CONE_SHADOW is not None else (0, 0)
+    for c in CONES:
+        sx, sy = cam.to_screen(c["x"], c["y"])
+        if not (-40 <= sx <= W + 40 and -40 <= sy <= H + 40):
+            continue
+        if shadow_on and CONE_SHADOW is not None and not c["knocked"]:
+            screen.blit(CONE_SHADOW, (round(sx - csw // 2 + dx_c), round(sy - csh // 2 + dy_c - 1)))
+
+        if c["angle"] != 0.0:
+            rot = pygame.transform.rotate(CONE_SURF, c["angle"])
+            rw, rh = rot.get_size()
+            screen.blit(rot, (round(sx - rw // 2), round(sy - rh // 2)))
+        else:
+            screen.blit(CONE_SURF, (round(sx - cw // 2), round(sy - ch)))
+
+# ---- shaders and post-processing ----------------------------------------------------
+SHADER_PRESETS = ["OFF", "SOFT MIST", "RETRO CRT", "CINEMATIC", "FULL FX"]
+FOG_OPTIONS = ["OFF", "LOW", "MEDIUM", "HIGH"]
+CRT_OPTIONS = ["OFF", "SUBTLE", "RETRO"]
+VIGNETTE_OPTIONS = ["OFF", "ON"]
+SHADOWS_OPTIONS = ["OFF", "ON"]
+
+SHADER_SETTINGS = {
+    "preset": "CINEMATIC",
+    "fog": "MEDIUM",
+    "crt": "OFF",
+    "vignette": "ON",
+    "shadows": "ON",
+}
+
+FOG_LEVEL_DENSITY = {"OFF": 0.0, "LOW": 0.33, "MEDIUM": 0.55, "HIGH": 0.9}
+FOG_DENSITY = FOG_LEVEL_DENSITY["MEDIUM"]   # 0..1, the real knob the slider drives
+
+def _sync_fog_density_from_level():
+    global FOG_DENSITY
+    FOG_DENSITY = FOG_LEVEL_DENSITY.get(SHADER_SETTINGS.get("fog", "MEDIUM"), 0.55)
+
+def set_fog_density(v):
+    # slider 0..1; 0 = no fog. Keeps the fog label roughly in sync for the preset display.
+    global FOG_DENSITY
+    FOG_DENSITY = max(0.0, min(1.0, v))
+    label = "OFF" if FOG_DENSITY < 0.02 else min(
+        ("LOW", "MEDIUM", "HIGH"), key=lambda k: abs(FOG_LEVEL_DENSITY[k] - FOG_DENSITY))
+    SHADER_SETTINGS["fog"] = label
+    update_shader_preset_label()
+    _rebuild_shader_surface()
+
+_SHADER_SURF = None
 _FOG_SURF = None
 
-def draw_fog(screen):
-    global _FOG_SURF
-    if _FOG_SURF is None:
-        _FOG_SURF = pygame.Surface((W, H), pygame.SRCALPHA)
-        # Gentle ambient cool mist tint
-        _FOG_SURF.fill((210, 222, 235, 18))
-        # Soft organic mist puffs
-        for x, y, rad, a in [
-            (int(W * 0.25), int(H * 0.28), 260, 22),
-            (int(W * 0.65), int(H * 0.62), 320, 20),
-            (int(W * 0.85), int(H * 0.32), 240, 18),
-            (int(W * 0.38), int(H * 0.82), 280, 20),
+def _rebuild_shader_surface():
+    global _SHADER_SURF, _FOG_SURF
+    fog_on = FOG_DENSITY > 0.02
+    crt_level = SHADER_SETTINGS.get("crt", "OFF")
+    vig_level = SHADER_SETTINGS.get("vignette", "ON")
+
+    if not fog_on and crt_level == "OFF" and vig_level == "OFF":
+        _SHADER_SURF = None
+        _FOG_SURF = None
+        return
+
+    surf = pygame.Surface((W, H), pygame.SRCALPHA)
+
+    # 1. Fog Layer -- alpha scales continuously with FOG_DENSITY
+    if fog_on:
+        tint_a = int(4 + 30 * FOG_DENSITY)
+        puff_a = int(6 + 40 * FOG_DENSITY)
+        fog_layer = pygame.Surface((W, H), pygame.SRCALPHA)
+        fog_layer.fill((210, 222, 235, tint_a))
+        for x, y, rad in [
+            (int(W * 0.25), int(H * 0.28), 260),
+            (int(W * 0.65), int(H * 0.62), 320),
+            (int(W * 0.85), int(H * 0.32), 240),
+            (int(W * 0.38), int(H * 0.82), 280),
         ]:
             m = pygame.Surface((rad * 2, rad * 2), pygame.SRCALPHA)
             for r in range(rad, 0, -8):
-                fa = int(a * ((1.0 - r / rad) ** 1.5))
+                fa = int(puff_a * ((1.0 - r / rad) ** 1.5))
                 if fa > 0:
                     pygame.draw.circle(m, (220, 232, 245, fa), (rad, rad), r)
-            _FOG_SURF.blit(m, (x - rad, y - rad))
-    screen.blit(_FOG_SURF, (0, 0))
+            fog_layer.blit(m, (x - rad, y - rad))
+        surf.blit(fog_layer, (0, 0))
+        _FOG_SURF = fog_layer
+    else:
+        _FOG_SURF = None
+
+    # 2. Vignette Layer
+    if vig_level == "ON":
+        cx, cy = W / 2, H / 2
+        max_dist = math.hypot(cx, cy)
+        vig = pygame.Surface((W, H), pygame.SRCALPHA)
+        for r in range(int(max_dist), int(max_dist * 0.35), -8):
+            norm = (r - max_dist * 0.35) / (max_dist * 0.65)
+            alpha = int(45 * (norm ** 1.8))
+            pygame.draw.circle(vig, (8, 12, 20, alpha), (int(cx), int(cy)), r)
+        surf.blit(vig, (0, 0))
+
+    # 3. CRT Scanlines Layer
+    if crt_level != "OFF":
+        alpha = 18 if crt_level == "SUBTLE" else 38
+        crt = pygame.Surface((W, H), pygame.SRCALPHA)
+        for y in range(0, H, 2):
+            pygame.draw.line(crt, (0, 0, 0, alpha), (0, y), (W, y))
+        surf.blit(crt, (0, 0))
+
+    _SHADER_SURF = surf
+
+def apply_shader_preset(preset):
+    if preset == "OFF":
+        SHADER_SETTINGS["preset"] = "OFF"
+        SHADER_SETTINGS["fog"] = "OFF"
+        SHADER_SETTINGS["crt"] = "OFF"
+        SHADER_SETTINGS["vignette"] = "OFF"
+        SHADER_SETTINGS["shadows"] = "OFF"
+    elif preset == "SOFT MIST":
+        SHADER_SETTINGS["preset"] = "SOFT MIST"
+        SHADER_SETTINGS["fog"] = "MEDIUM"
+        SHADER_SETTINGS["crt"] = "OFF"
+        SHADER_SETTINGS["vignette"] = "OFF"
+        SHADER_SETTINGS["shadows"] = "ON"
+    elif preset == "RETRO CRT":
+        SHADER_SETTINGS["preset"] = "RETRO CRT"
+        SHADER_SETTINGS["fog"] = "OFF"
+        SHADER_SETTINGS["crt"] = "RETRO"
+        SHADER_SETTINGS["vignette"] = "ON"
+        SHADER_SETTINGS["shadows"] = "ON"
+    elif preset == "CINEMATIC":
+        SHADER_SETTINGS["preset"] = "CINEMATIC"
+        SHADER_SETTINGS["fog"] = "MEDIUM"
+        SHADER_SETTINGS["crt"] = "OFF"
+        SHADER_SETTINGS["vignette"] = "ON"
+        SHADER_SETTINGS["shadows"] = "ON"
+    elif preset == "FULL FX":
+        SHADER_SETTINGS["preset"] = "FULL FX"
+        SHADER_SETTINGS["fog"] = "MEDIUM"
+        SHADER_SETTINGS["crt"] = "SUBTLE"
+        SHADER_SETTINGS["vignette"] = "ON"
+        SHADER_SETTINGS["shadows"] = "ON"
+    _sync_fog_density_from_level()
+    _rebuild_shader_surface()
+
+def update_shader_preset_label():
+    for p in SHADER_PRESETS:
+        test = {}
+        if p == "OFF":
+            test = {"fog": "OFF", "crt": "OFF", "vignette": "OFF", "shadows": "OFF"}
+        elif p == "SOFT MIST":
+            test = {"fog": "MEDIUM", "crt": "OFF", "vignette": "OFF", "shadows": "ON"}
+        elif p == "RETRO CRT":
+            test = {"fog": "OFF", "crt": "RETRO", "vignette": "ON", "shadows": "ON"}
+        elif p == "CINEMATIC":
+            test = {"fog": "MEDIUM", "crt": "OFF", "vignette": "ON", "shadows": "ON"}
+        elif p == "FULL FX":
+            test = {"fog": "MEDIUM", "crt": "SUBTLE", "vignette": "ON", "shadows": "ON"}
+        if all(SHADER_SETTINGS.get(k) == v for k, v in test.items()):
+            SHADER_SETTINGS["preset"] = p
+            return
+    SHADER_SETTINGS["preset"] = "CUSTOM"
+
+def set_shader_option(key, val):
+    SHADER_SETTINGS[key] = val
+    if key == "fog":
+        _sync_fog_density_from_level()
+    update_shader_preset_label()
+    _rebuild_shader_surface()
+
+def set_shader_settings(d):
+    if not isinstance(d, dict):
+        return
+    for k in ("fog", "crt", "vignette", "shadows"):
+        if k in d:
+            SHADER_SETTINGS[k] = d[k]
+    if "fog_density" in d:
+        try:
+            globals()["FOG_DENSITY"] = max(0.0, min(1.0, float(d["fog_density"])))
+        except (TypeError, ValueError):
+            _sync_fog_density_from_level()
+    else:
+        _sync_fog_density_from_level()
+    if "preset" in d:
+        SHADER_SETTINGS["preset"] = d["preset"]
+    else:
+        update_shader_preset_label()
+    _rebuild_shader_surface()
+
+def draw_shaders(screen):
+    global _SHADER_SURF
+    if _SHADER_SURF is None and any(SHADER_SETTINGS.get(k) != "OFF" for k in ("fog", "crt", "vignette")):
+        _rebuild_shader_surface()
+    if _SHADER_SURF is not None:
+        screen.blit(_SHADER_SURF, (0, 0))
+
+def draw_fog(screen):
+    draw_shaders(screen)
 
 def draw_world(screen, cam, cars):
     draw_ground(screen, cam)
+    draw_oil(screen, cam)
     draw_trails(screen, cars, cam)
+    draw_destructibles(screen, cam)
+    draw_cones(screen, cam)
     draw_boxes(screen, cam)
-    for car in cars:
-        draw_car_shadow(screen, car, cam)
+    if SHADER_SETTINGS.get("shadows", "ON") == "ON":
+        for car in cars:
+            draw_car_shadow(screen, car, cam)
     for car in cars:
         draw_car(screen, car, cam)
+    draw_projectiles(screen, cam)
     draw_particles(screen, cam)
-    draw_fog(screen)
+    draw_fx(screen, cam)
+    draw_shaders(screen)
     draw_name_labels(screen, cars, cam)
 
 def _heart_points(x, y, size):
@@ -2293,8 +3838,8 @@ def draw_leaderboard(screen, cars, player):
     screen.blit(head, (x, y0 - 4))
     for i, c in enumerate(order):
         yc = y0 + 18 + i * row_h
-        name = c.name                      # the player's row is highlighted blue
-        color = (80, 190, 255) if c is player else (235, 235, 235)
+        name = c.name                      # the player's row is marked yellow (blue is menu-only)
+        color = (255, 210, 70) if c is player else (235, 235, 235)
         pygame.draw.circle(screen, c.color, (x + 6, yc + 8), 4)
         pygame.draw.circle(screen, (255, 255, 255), (x + 6, yc + 8), 4, 1)
         screen.blit(_text_outlined(font, f"{i + 1}.", color), (x + 12, yc))
@@ -2313,7 +3858,7 @@ def draw_leaderboard(screen, cars, player):
 
     # the player's lap count, x / y, under the board
     cur = min(lap_of(player) + 1, TOTAL_LAPS)
-    lap_s = _text_outlined(get_font(26), f"LAP {cur}/{TOTAL_LAPS}", (80, 190, 255))
+    lap_s = _text_outlined(get_font(26), f"LAP {cur}/{TOTAL_LAPS}", (255, 210, 70))
     screen.blit(lap_s, lap_s.get_rect(topright=(x + w - 6, y0 + 18 + len(order) * row_h + 4)))
 
 def _pixel_bar(screen, color, rect, r=2):
@@ -2329,6 +3874,18 @@ def _pixel_bar(screen, color, rect, r=2):
 
 def draw_hud(screen, car, font=None, cars=None):
     draw_hearts(screen, car.hearts)
+    if getattr(car, "item", None) is not None:
+        ix, iy = 20, 52
+        item_label = "CONE" if car.item == "cone" else "OIL SLICK"
+        key_hint = "[F/C]" if car.item == "cone" else "[F/V]"
+        panel = pygame.Surface((132, 26), pygame.SRCALPHA)
+        panel.fill((20, 24, 32, 210))
+        border_col = (255, 140, 30) if car.item == "cone" else (180, 180, 200)
+        pygame.draw.rect(panel, border_col, (0, 0, 132, 26), 1)
+        screen.blit(panel, (ix, iy))
+        hud_f = get_font(18)
+        lbl = _text_outlined(hud_f, f"{key_hint} {item_label}", (255, 235, 120))
+        screen.blit(lbl, (ix + 6, iy + 4))
     if cars is not None:
         draw_leaderboard(screen, cars, car)
         draw_minimap(screen, cars, car)

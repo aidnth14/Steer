@@ -16,6 +16,7 @@ PAD_STEER_AXIS = pygame.CONTROLLER_AXIS_LEFTX
 PAD_BASH_L = pygame.CONTROLLER_BUTTON_LEFTSHOULDER    # LB / L1 / L
 PAD_BASH_R = pygame.CONTROLLER_BUTTON_RIGHTSHOULDER   # RB / R1 / R
 PAD_RAM = pygame.CONTROLLER_BUTTON_A                  # A / Cross / B(south)
+PAD_SHOOT = pygame.CONTROLLER_BUTTON_X                # X / Square / Y(west)
 PAD_PAUSE = pygame.CONTROLLER_BUTTON_START
 PAD_CONFIRM = pygame.CONTROLLER_BUTTON_A
 PAD_BACK = pygame.CONTROLLER_BUTTON_B
@@ -32,9 +33,11 @@ PROFILE_PATH = os.path.join(os.path.expanduser("~"), ".steer_profile.json")
 DEFAULT_KEYS = {
     "left": pygame.K_a, "right": pygame.K_d, "bashL": pygame.K_q,
     "bashR": pygame.K_e, "ram": pygame.K_SPACE, "drift": pygame.K_LSHIFT,
+    "shoot": pygame.K_f, "cone": pygame.K_c, "oil": pygame.K_v,
 }
 KEY_ACTIONS = [("left", "Steer left"), ("right", "Steer right"), ("bashL", "Bash left"),
-               ("bashR", "Bash right"), ("ram", "Ram"), ("drift", "Drift")]
+               ("bashR", "Bash right"), ("ram", "Ram"), ("drift", "Drift"), ("shoot", "Shoot / Item"),
+               ("cone", "Throw Cone"), ("oil", "Spill Oil")]
 
 GAME_MODES = [("race", "Race"), ("trial", "Time Trial"), ("elim", "Elimination"),
               ("battle", "Battle"), ("team", "Team Race")]
@@ -46,17 +49,21 @@ MENU_STATES = {"menu", "mode", "gamemode", "mp_menu", "host_setup", "join_entry"
 def load_profile():
     import json
     d = {"name": "Player", "flag": "us", "races": 0, "wins": 0,
-         "best_lap": 0.0, "volume": 0.8, "laps": 3, "keys": {}}
+         "best_lap": 0.0, "volume": 0.8, "laps": 3, "keys": {},
+         "shaders": dict(sim.SHADER_SETTINGS)}
     try:
         with open(PROFILE_PATH) as f:
             d.update(json.load(f))
     except (OSError, ValueError):
         pass
+    if "shaders" in d and isinstance(d["shaders"], dict):
+        sim.set_shader_settings(d["shaders"])
     return d
 
 def save_profile(d):
     import json
     try:
+        d["shaders"] = dict(sim.SHADER_SETTINGS)
         with open(PROFILE_PATH, "w") as f:
             json.dump(d, f, indent=2)
     except OSError as e:
@@ -123,7 +130,8 @@ def migrate_car(old):
 def migrate_cam(old, car):
     return migrate(old, sim.Camera(car))
 
-UI_HIGHLIGHT = (80, 190, 255)   # vibrant cyan-blue highlight
+UI_HIGHLIGHT = (80, 190, 255)   # blue: ONLY for highlighting menu buttons
+UI_ACCENT = (255, 210, 70)      # yellow: every other emphasis (codes, you-markers, HUD, etc.)
 UI_POINTER = None
 
 class Button:
@@ -158,6 +166,11 @@ def main():
     pygame.init()
     screen = pygame.display.set_mode((sim.W, sim.H))
     pygame.display.set_caption("Steer")
+
+    def apply_display(fs):
+        # windowed = fixed 600x400; fullscreen = SCALED so the logical surface upscales cleanly
+        flags = (pygame.FULLSCREEN | pygame.SCALED) if fs else 0
+        return pygame.display.set_mode((sim.W, sim.H), flags)
     clock = pygame.time.Clock()
     sim.load_assets()
 
@@ -374,8 +387,22 @@ def main():
     profile = load_profile()
     keybinds = dict(DEFAULT_KEYS)
     keybinds.update({k: int(v) for k, v in profile.get("keys", {}).items() if k in DEFAULT_KEYS})
-    sim.set_master_volume(profile.get("volume", 0.8))
+    sim.set_sfx_volume(profile.get("sfx_volume", profile.get("volume", 0.8)))
+    sim.set_music_volume(profile.get("music_volume", 0.6))
+    sim.set_steer_rate(profile.get("steer_rate", sim.steer_rate_frac()))
+    sim.set_drift_assist(profile.get("drift_assist", sim.drift_assist_frac()))
+    sim.set_shake_intensity(profile.get("shake", sim.shake_intensity_frac()))
+    sim.set_zoom(profile.get("zoom", sim.zoom_frac()))
+    sim.INVERT_STEER = bool(profile.get("invert_steer", False))
+    sim.set_master_mute(bool(profile.get("mute", False)))
+    if "fog_density" in profile:
+        sim.set_fog_density(profile["fog_density"])
+    sim.start_music()
     sim.TOTAL_LAPS = int(profile.get("laps", 3))
+    fullscreen = bool(profile.get("fullscreen", False))
+    show_fps = bool(profile.get("show_fps", False))
+    if fullscreen:
+        screen = apply_display(True)
 
     state = "menu"
     menu_sel = mode_sel = gamemode_sel = mp_sel = 0  # highlighted menu row for controller / keyboard nav
@@ -396,7 +423,6 @@ def main():
     last_ranks = {}             # car -> last leaderboard rank, for position popups
     popup = None                # (text, color, seconds-left)
     awaiting_key = None         # action name being rebound in Settings
-    vol_dragging = False
 
     # multiplayer state
     online = False              # True once a networked race is running
@@ -425,14 +451,78 @@ def main():
     join_btn = Button((sim.W / 2 - 110, 182, 220, 48), "Join Game")
     sp_btn = Button((sim.W / 2 - 110, 120, 220, 48), "Singleplayer")
     mp_btn = Button((sim.W / 2 - 110, 182, 220, 48), "Multiplayer")
-    minus_btn = Button((sim.W / 2 - 30, 196, 40, 40), "-")
-    plus_btn = Button((sim.W / 2 + 90, 196, 40, 40), "+")
+    minus_btn = Button((sim.W / 2 - 100, 198, 40, 40), "-")   # left of the number, no overlap
+    plus_btn = Button((sim.W / 2 + 60, 198, 40, 40), "+")      # right of the number, symmetric
     create_btn = Button((sim.W / 2 - 100, 256, 200, 42), "Create Lobby")
     confirm_join_btn = Button((sim.W / 2 - 100, 256, 200, 42), "Join")
     ready_btn = Button((sim.W / 2 - 170, 330, 150, 40), "Ready")
     leave_btn = Button((sim.W / 2 + 20, 330, 150, 40), "Leave")
-    laps_btn = Button((sim.W / 2 + 10, 132, 150, 34), "Laps: 3")
-    vol_track = pygame.Rect(sim.W / 2 + 10, 92, 150, 10)
+    # general-tab sliders (left column): each a 0..1 value with a getter/setter + profile key
+    SL_X, SL_W, SL_H = 24, 150, 8
+    sliders = [
+        {"label": "SFX",         "get": lambda: sim.SFX_VOLUME,   "set": sim.set_sfx_volume,    "key": "sfx_volume"},
+        {"label": "Music",       "get": lambda: sim.MUSIC_VOLUME, "set": sim.set_music_volume,  "key": "music_volume"},
+        {"label": "Fog",         "get": lambda: sim.FOG_DENSITY,  "set": sim.set_fog_density,   "key": "fog_density"},
+        {"label": "Steering",    "get": sim.steer_rate_frac,      "set": sim.set_steer_rate,    "key": "steer_rate"},
+        {"label": "Camera Zoom", "get": sim.zoom_frac,            "set": sim.set_zoom,          "key": "zoom"},
+        {"label": "Drift Assist","get": sim.drift_assist_frac,    "set": sim.set_drift_assist,  "key": "drift_assist"},
+        {"label": "Shake",       "get": sim.shake_intensity_frac, "set": sim.set_shake_intensity,"key": "shake"},
+    ]
+    for i, s in enumerate(sliders):
+        s["track"] = pygame.Rect(SL_X, 74 + i * 30, SL_W, SL_H)
+    active_slider = None        # the slider dict currently being dragged, or None
+    # general-tab toggles (middle column)
+    TGL_X = 210
+    inv_btn = Button((TGL_X, 70, 170, 26), "")
+    mute_btn = Button((TGL_X, 104, 170, 26), "")
+    fs_btn = Button((TGL_X, 138, 170, 26), "")
+    fps_btn = Button((TGL_X, 172, 170, 26), "")
+
+    settings_tab = "general"
+    shader_sel = 0
+    tab_gen_btn = Button((sim.W / 2 - 160, 22, 150, 32), "GENERAL")
+    tab_shd_btn = Button((sim.W / 2 + 10, 22, 150, 32), "SHADERS")
+    shd_quick_btn = Button((sim.W / 2 + 10, 134, 150, 30), f"{sim.SHADER_SETTINGS['preset']} >")
+    shd_row_btns = [
+        Button((sim.W / 2 + 10, 74 + i * 38, 165, 32), "") for i in range(5)
+    ]
+    settings_back_btn = Button((sim.W / 2 - 80, 344, 160, 36), "Back")
+
+    SHADER_DESCRIPTIONS = {
+        "CINEMATIC": "Atmospheric mist + soft vignette corners",
+        "SOFT MIST": "Gentle cool track fog layer",
+        "RETRO CRT": "90s arcade scanlines + curved vignette",
+        "FULL FX": "Combined fog + subtle scanlines + vignette",
+        "OFF": "Clean raw pixels, no post-processing",
+        "CUSTOM": "Customized shader parameters",
+    }
+
+    def cycle_shader_option(idx, delta):
+        if idx == 0:
+            opts = sim.SHADER_PRESETS
+            cur = sim.SHADER_SETTINGS.get("preset", "CINEMATIC")
+            i = opts.index(cur) if cur in opts else 0
+            sim.apply_shader_preset(opts[(i + delta) % len(opts)])
+        elif idx == 1:
+            opts = sim.FOG_OPTIONS
+            cur = sim.SHADER_SETTINGS.get("fog", "MEDIUM")
+            i = opts.index(cur) if cur in opts else 0
+            sim.set_shader_option("fog", opts[(i + delta) % len(opts)])
+        elif idx == 2:
+            opts = sim.CRT_OPTIONS
+            cur = sim.SHADER_SETTINGS.get("crt", "OFF")
+            i = opts.index(cur) if cur in opts else 0
+            sim.set_shader_option("crt", opts[(i + delta) % len(opts)])
+        elif idx == 3:
+            opts = sim.VIGNETTE_OPTIONS
+            cur = sim.SHADER_SETTINGS.get("vignette", "ON")
+            i = opts.index(cur) if cur in opts else 0
+            sim.set_shader_option("vignette", opts[(i + delta) % len(opts)])
+        elif idx == 4:
+            opts = sim.SHADOWS_OPTIONS
+            cur = sim.SHADER_SETTINGS.get("shadows", "ON")
+            i = opts.index(cur) if cur in opts else 0
+            sim.set_shader_option("shadows", opts[(i + delta) % len(opts)])
 
     cars, player, cam = [], None, None
     attract_cars, attract_cam = [], None    # live bots racing behind the menu
@@ -605,6 +695,7 @@ def main():
     while running:
         dt = min(clock.tick(60) / 1000.0, 1 / 30)   # clamp so a freeze/stall can't teleport the car
         mouse_pos = pygame.mouse.get_pos()
+        sim.SFX_MUTED = state != "playing"   # menus + attract-mode race run silent
 
         # hot reload: main.py edits restart the process; sim.py edits reload live. In a race,
         # sim.py is handled below (state carries over); everywhere else, reload it in place so
@@ -753,17 +844,29 @@ def main():
                         save_profile(profile)
                     awaiting_key = None
                     continue
+                if event.key == pygame.K_m:         # global mute toggle
+                    sim.set_master_mute(not sim.MASTER_MUTE)
+                    profile["mute"] = sim.MASTER_MUTE
+                    save_profile(profile)
                 if state == "playing":
                     if event.key == pygame.K_r and not online:
                         reload_and_migrate()
                     elif event.key == pygame.K_ESCAPE:
                         state = "menu"          # pauses; the race stays alive for Resume
-                    elif event.key == keybinds["bashL"]:
+                    elif event.key == keybinds.get("bashL"):
                         action = "left"
-                    elif event.key == keybinds["bashR"]:
+                    elif event.key == keybinds.get("bashR"):
                         action = "right"
-                    elif event.key == keybinds["ram"]:
+                    elif event.key == keybinds.get("ram"):
                         action = "ram"
+                    elif event.key == keybinds.get("shoot"):
+                        action = "shoot"
+                    elif event.key == keybinds.get("cone", pygame.K_c):
+                        pressed = pygame.key.get_pressed()
+                        down_pressed = pressed[pygame.K_DOWN] or pressed[pygame.K_s]
+                        action = "drop_cone" if down_pressed else "cone"
+                    elif event.key == keybinds.get("oil", pygame.K_v):
+                        action = "oil"
                 elif state == "menu":
                     if event.key in (pygame.K_DOWN, pygame.K_s):
                         menu_sel = (menu_sel + 1) % len(menu_buttons)
@@ -850,9 +953,37 @@ def main():
                         join_code = join_code[:-1]
                     elif event.unicode and event.unicode.isalnum() and len(join_code) < 6:
                         join_code += event.unicode.upper()
-                elif event.key == pygame.K_ESCAPE and state in ("settings", "results"):
-                    if state == "results":
-                        player = None
+                elif state == "settings":
+                    if event.key == pygame.K_TAB:
+                        settings_tab = "shaders" if settings_tab == "general" else "general"
+                    elif event.key == pygame.K_ESCAPE:
+                        save_profile(profile)
+                        state = "menu"
+                    elif settings_tab == "shaders":
+                        if event.key in (pygame.K_DOWN, pygame.K_s):
+                            shader_sel = (shader_sel + 1) % 6
+                        elif event.key in (pygame.K_UP, pygame.K_w):
+                            shader_sel = (shader_sel - 1) % 6
+                        elif event.key in (pygame.K_LEFT, pygame.K_a):
+                            if shader_sel < 5:
+                                cycle_shader_option(shader_sel, -1)
+                                profile["shaders"] = dict(sim.SHADER_SETTINGS)
+                                save_profile(profile)
+                        elif event.key in (pygame.K_RIGHT, pygame.K_d):
+                            if shader_sel < 5:
+                                cycle_shader_option(shader_sel, 1)
+                                profile["shaders"] = dict(sim.SHADER_SETTINGS)
+                                save_profile(profile)
+                        elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
+                            if shader_sel == 5:
+                                save_profile(profile)
+                                state = "menu"
+                            else:
+                                cycle_shader_option(shader_sel, 1)
+                                profile["shaders"] = dict(sim.SHADER_SETTINGS)
+                                save_profile(profile)
+                elif event.key == pygame.K_ESCAPE and state == "results":
+                    player = None
                     state = "menu"
                 elif event.key == pygame.K_ESCAPE and state in ("host_setup",):
                     state = "mp_menu"
@@ -944,15 +1075,29 @@ def main():
                     if back_btn.clicked(mouse_pos):
                         save_profile(profile)
                         state = "menu"
-                    elif laps_btn.clicked(mouse_pos):
-                        nxt = {3: 5, 5: 7, 7: 3}
-                        sim.TOTAL_LAPS = nxt.get(sim.TOTAL_LAPS, 3)
-                        profile["laps"] = sim.TOTAL_LAPS
-                    elif vol_track.collidepoint(mouse_pos):
-                        vol_dragging = True
+                    elif inv_btn.clicked(mouse_pos):
+                        sim.INVERT_STEER = not sim.INVERT_STEER
+                        profile["invert_steer"] = sim.INVERT_STEER
+                        save_profile(profile)
+                    elif mute_btn.clicked(mouse_pos):
+                        sim.set_master_mute(not sim.MASTER_MUTE)
+                        profile["mute"] = sim.MASTER_MUTE
+                        save_profile(profile)
+                    elif fs_btn.clicked(mouse_pos):
+                        fullscreen = not fullscreen
+                        screen = apply_display(fullscreen)
+                        profile["fullscreen"] = fullscreen
+                        save_profile(profile)
+                    elif fps_btn.clicked(mouse_pos):
+                        show_fps = not show_fps
+                        profile["show_fps"] = show_fps
+                        save_profile(profile)
+                    elif any(s["track"].inflate(12, 12).collidepoint(mouse_pos) for s in sliders):
+                        active_slider = next(s for s in sliders
+                                             if s["track"].inflate(12, 12).collidepoint(mouse_pos))
                     else:
                         for i, (ak, _) in enumerate(KEY_ACTIONS):
-                            rr = pygame.Rect(sim.W / 2 - 170, 186 + i * 20, 340, 20)
+                            rr = pygame.Rect(400, 82 + i * 22, sim.W - 416, 22)
                             if rr.collidepoint(mouse_pos):
                                 awaiting_key = ak
                                 break
@@ -961,9 +1106,9 @@ def main():
                         player = None
                         state = "menu"
             elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
-                if vol_dragging:
-                    vol_dragging = False
-                    profile["volume"] = sim.MASTER_VOLUME
+                if active_slider is not None:
+                    profile[active_slider["key"]] = round(active_slider["get"](), 3)
+                    active_slider = None
                     save_profile(profile)
             elif event.type == pygame.CONTROLLERDEVICEADDED:
                 open_pad(event.device_index)
@@ -978,6 +1123,8 @@ def main():
                         action = "right"
                     elif b == PAD_RAM:
                         action = "ram"
+                    elif b == PAD_SHOOT:
+                        action = "shoot"
                     elif b == PAD_PAUSE:
                         state = "menu"
                 elif state == "menu":
@@ -1073,6 +1220,8 @@ def main():
                 if keys[pygame.K_RIGHT] or keys[keybinds["right"]]:
                     steer += 1
                 steer = max(-1.0, min(1.0, steer + pad_steer() + gyro_steer()))
+                if sim.INVERT_STEER:
+                    steer = -steer
                 drift = keys[keybinds["drift"]] or pad_drift()
 
                 spectating = online and player.dead
@@ -1244,7 +1393,7 @@ def main():
                     fr = flag.get_rect(center=(sim.W / 2, 218))
                     screen.blit(flag, fr)
                     pygame.draw.rect(screen, (230, 230, 230), fr, 1)
-                ctext = font_small.render(code.upper(), True, UI_HIGHLIGHT)
+                ctext = font_small.render(code.upper(), True, UI_ACCENT)
                 screen.blit(ctext, ctext.get_rect(center=(sim.W / 2, 242)))
             flag_prev.draw(screen, font, flag_prev.clicked(mouse_pos))
             flag_next.draw(screen, font, flag_next.clicked(mouse_pos))
@@ -1257,30 +1406,39 @@ def main():
             draw_bg()
             title = font_big.render("SETTINGS", True, (255, 255, 255))
             screen.blit(title, title.get_rect(center=(sim.W / 2, 40)))
-            # volume slider
-            if vol_dragging:
-                v = (mouse_pos[0] - vol_track.x) / vol_track.w
-                sim.set_master_volume(v)
-            screen.blit(font_small.render("Volume", True, (220, 230, 210)), (sim.W / 2 - 170, 88))
-            pygame.draw.rect(screen, (40, 55, 40), vol_track, border_radius=4)
-            fillw = int(vol_track.w * sim.MASTER_VOLUME)
-            pygame.draw.rect(screen, UI_HIGHLIGHT, (vol_track.x, vol_track.y, fillw, vol_track.h),
-                             border_radius=4)
-            pygame.draw.circle(screen, (255, 255, 255), (vol_track.x + fillw, vol_track.centery), 7)
-            # lap count
-            screen.blit(font_small.render("Laps", True, (220, 230, 210)), (sim.W / 2 - 170, 140))
-            laps_btn.label = f"Laps: {sim.TOTAL_LAPS}"
-            laps_btn.draw(screen, font_small, laps_btn.clicked(mouse_pos))
-            # controls (click a row, then press a key)
-            screen.blit(font_small.render("Controls (click, then press a key):", True,
-                                          (200, 220, 200)), (sim.W / 2 - 170, 168))
+            # left column: sliders (SFX / Music / Fog / Steering)
+            if active_slider is not None:
+                v = (mouse_pos[0] - active_slider["track"].x) / active_slider["track"].w
+                active_slider["set"](max(0.0, min(1.0, v)))
+            for s in sliders:
+                tr = s["track"]
+                screen.blit(font_small.render(s["label"], True, (220, 230, 210)),
+                            (tr.x, tr.y - 16))
+                pygame.draw.rect(screen, (40, 55, 40), tr, border_radius=4)
+                frac = max(0.0, min(1.0, s["get"]()))
+                fillw = int(tr.w * frac)
+                pygame.draw.rect(screen, UI_ACCENT, (tr.x, tr.y, fillw, tr.h), border_radius=4)
+                pygame.draw.circle(screen, (255, 255, 255), (tr.x + fillw, tr.centery), 7)
+                pygame.draw.circle(screen, (30, 30, 35), (tr.x + fillw, tr.centery), 7, 1)
+            # middle column: toggles (ON/OFF buttons)
+            inv_btn.label = f"Inverted Steer: {'ON' if sim.INVERT_STEER else 'OFF'}"
+            mute_btn.label = f"Master Mute: {'ON' if sim.MASTER_MUTE else 'OFF'}"
+            fs_btn.label = f"Fullscreen: {'ON' if fullscreen else 'OFF'}"
+            fps_btn.label = f"FPS Counter: {'ON' if show_fps else 'OFF'}"
+            for btn, on in ((inv_btn, sim.INVERT_STEER), (mute_btn, sim.MASTER_MUTE),
+                            (fs_btn, fullscreen), (fps_btn, show_fps)):
+                btn.draw(screen, font_small, btn.clicked(mouse_pos) or on)
+            # right column: controls (click a row, then press a key)
+            cx = 400
+            screen.blit(font_small.render("Controls (click, then a key):", True,
+                                          (200, 220, 200)), (cx, 60))
             for i, (ak, albl) in enumerate(KEY_ACTIONS):
-                y = 186 + i * 20
+                y = 82 + i * 22
                 binding = "press a key..." if awaiting_key == ak else pygame.key.name(keybinds[ak])
-                col = UI_HIGHLIGHT if awaiting_key == ak else (230, 230, 230)
-                screen.blit(font_small.render(albl, True, (210, 220, 210)), (sim.W / 2 - 170, y))
+                col = UI_ACCENT if awaiting_key == ak else (230, 230, 230)
+                screen.blit(font_small.render(albl, True, (210, 220, 210)), (cx, y))
                 b = font_small.render(binding, True, col)
-                screen.blit(b, b.get_rect(midright=(sim.W / 2 + 170, y + 10)))
+                screen.blit(b, b.get_rect(midright=(sim.W - 16, y + 10)))
             back_btn.draw(screen, font, back_btn.clicked(mouse_pos))
 
         elif state == "results":
@@ -1288,15 +1446,16 @@ def main():
             title = font_big.render(end_title, True, (255, 255, 255))
             screen.blit(title, title.get_rect(center=(sim.W / 2, 36)))
             if team_result:
-                tr = font_small.render(team_result, True, UI_HIGHLIGHT)
+                tr = font_small.render(team_result, True, UI_ACCENT)
                 screen.blit(tr, tr.get_rect(center=(sim.W / 2, 66)))
             hdr = font_small.render("best lap", True, (170, 185, 165))
             screen.blit(hdr, hdr.get_rect(midright=(sim.W / 2 + 170, 78)))
+            row_gap = font_small.get_height() + 5     # >=5px clear space between rows
             for i, c in enumerate(final_order):
                 me = c is player
                 tag = f"{i + 1}.  {c.name}" + ("  (you)" if me else "") + ("  OUT" if c.dead else "")
-                color = UI_HIGHLIGHT if me else (235, 235, 235)
-                y = 90 + i * 18
+                color = UI_ACCENT if me else (235, 235, 235)
+                y = 90 + i * row_gap
                 row = font_small.render(tag, True, color)
                 screen.blit(row, row.get_rect(midleft=(sim.W / 2 - 170, y)))
                 bl = font_small.render(sim.fmt_time(c.best_lap), True, (190, 205, 185))
@@ -1336,7 +1495,7 @@ def main():
             screen.blit(lbl, lbl.get_rect(center=(sim.W / 2, 130)))
             cap = font_small.render("Max players:", True, (220, 230, 210))
             screen.blit(cap, cap.get_rect(center=(sim.W / 2, 176)))
-            num = font.render(str(mp_max), True, UI_HIGHLIGHT)
+            num = font.render(str(mp_max), True, UI_ACCENT)
             screen.blit(num, num.get_rect(center=(sim.W / 2, 216)))
             minus_btn.draw(screen, font, minus_btn.clicked(mouse_pos))
             plus_btn.draw(screen, font, plus_btn.clicked(mouse_pos))
@@ -1373,7 +1532,7 @@ def main():
                 head = font_small.render(
                     f"{lobby.get('name','')}'s lobby    CODE: {lobby.get('code','')}"
                     f"    ({len(lobby.get('players', []))}/{lobby.get('max','?')})",
-                    True, UI_HIGHLIGHT)
+                    True, UI_ACCENT)
                 screen.blit(head, head.get_rect(center=(sim.W / 2, 70)))
                 for i, p in enumerate(lobby.get("players", [])):
                     y = 110 + i * 30
@@ -1383,7 +1542,7 @@ def main():
                     if fl:
                         screen.blit(fl, (x, y + 2))
                     nm = p["name"] + ("  (you)" if is_me else "") + ("  [host]" if p["id"] == lobby.get("host") else "")
-                    nmcol = UI_HIGHLIGHT if is_me else (235, 235, 235)
+                    nmcol = UI_ACCENT if is_me else (235, 235, 235)
                     screen.blit(font_small.render(nm, True, nmcol), (x + 26, y))
                     rtxt = "READY" if p["ready"] else "not ready"
                     rcol = (120, 230, 120) if p["ready"] else (200, 120, 120)
@@ -1403,6 +1562,10 @@ def main():
             else:
                 wait = font_small.render(net_msg or "Connecting...", True, (220, 220, 220))
                 screen.blit(wait, wait.get_rect(center=(sim.W / 2, sim.H / 2)))
+
+        if show_fps:
+            fps = font_small.render(f"{clock.get_fps():.0f} FPS", True, (255, 210, 70))
+            screen.blit(fps, (6, 4))
 
         pygame.display.flip()
 

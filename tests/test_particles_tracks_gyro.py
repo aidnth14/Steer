@@ -56,6 +56,10 @@ class TestParticlesTracksGyro(unittest.TestCase):
         # Test drawing trails on screen
         sim.draw_trails(screen, cars, cam)
 
+        # Stop the car so no new skid marks are created while waiting
+        car.vx = car.vy = 0.0
+        car.dead = True
+
         # Advance 10 seconds (600 steps) without drifting
         for _ in range(600):
             sim.step(dt, cars, [(0.0, None, False)])
@@ -63,14 +67,11 @@ class TestParticlesTracksGyro(unittest.TestCase):
         # At 10s into its 13s life, tyre tracks MUST still be present
         self.assertGreater(len(car.trail), 0, "Tracks should still exist after 10 seconds")
 
-        # Stop the car so no new skid marks are created while waiting
-        car.vx = car.vy = 0.0
-        # Advance another 4 seconds (total > 14s elapsed)
-        for _ in range(260):
-            car.vx = car.vy = 0.0
+        # Advance another 5 seconds (total 15s elapsed > 13.0s TRAIL_LIFE)
+        for _ in range(300):
             sim.step(dt, cars, [(0.0, None, False)])
 
-        # After 14 seconds (> 13.0s TRAIL_LIFE), tracks should be completely expired/cleared
+        # After 14+ seconds since the last skid mark (> 13.0s TRAIL_LIFE), tracks should be completely expired/cleared
         self.assertEqual(len(car.trail), 0, "Tracks should cleanly fade out and expire after 13s")
 
     def test_mobile_tilt_simulation(self):
