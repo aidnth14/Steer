@@ -1,7 +1,10 @@
 import math
 import os
 import random
+import socket
+import subprocess
 import sys
+from urllib.parse import urlparse
 import pygame
 from pygame._sdl2 import controller as sdlctrl
 
@@ -27,7 +30,29 @@ PAD_RIGHT = pygame.CONTROLLER_BUTTON_DPAD_RIGHT
 
 SIM_PATH = os.path.join(os.path.dirname(__file__), "sim.py")
 MAIN_PATH = os.path.abspath(__file__)
+SERVER_PATH = os.path.join(os.path.dirname(__file__), "server.py")
 PROFILE_PATH = os.path.join(os.path.expanduser("~"), ".steer_profile.json")
+
+def ensure_local_server():
+    # autostarts server.py so Host/Join work with zero setup; no-op if STEER_SERVER_URL
+    # points at a remote server, or something (us from a prior launch, docker-compose, a
+    # manual run) is already listening on the local port
+    url = urlparse(net.DEFAULT_URL)
+    if url.hostname not in ("localhost", "127.0.0.1"):
+        return
+    host, port = url.hostname, url.port or 8765
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.settimeout(0.3)
+        if s.connect_ex((host, port)) == 0:
+            return
+    try:
+        log = open(os.path.join(os.path.dirname(__file__), "server.log"), "a")
+        subprocess.Popen([sys.executable, SERVER_PATH],
+                          env=dict(os.environ, PORT=str(port)),
+                          stdout=log, stderr=log, start_new_session=True)
+        print(f"Started local multiplayer server on {host}:{port} (log: server.log)")
+    except OSError as e:
+        print("Could not start local multiplayer server:", e)
 
 # rebindable keyboard actions (defaults); stored per-user in the profile
 DEFAULT_KEYS = {
@@ -43,7 +68,7 @@ GAME_MODES = [("race", "Race"), ("trial", "Time Trial"), ("elim", "Elimination")
               ("battle", "Battle"), ("team", "Team Race")]
 ELIM_INTERVAL = 8.0     # seconds between eliminations in Elimination mode
 TEAM_COLORS = [(230, 70, 70), (70, 120, 235)]   # red / blue teams
-MENU_STATES = {"menu", "mode", "gamemode", "mp_menu", "host_setup", "join_entry",
+MENU_STATES = {"menu", "mode", "gamemode", "mp_menu",
                "settings", "name_entry", "results", "lobby"}
 
 def load_profile():
@@ -59,6 +84,23 @@ def load_profile():
     if "shaders" in d and isinstance(d["shaders"], dict):
         sim.set_shader_settings(d["shaders"])
     return d
+
+def apply_profile_to_sim(d):
+    # sim.py keeps these settings as module globals, and a hot reload of sim.py resets them to
+    # sim's defaults -- so they're pushed in here at startup AND again after every reload
+    if isinstance(d.get("shaders"), dict):
+        sim.set_shader_settings(d["shaders"])
+    sim.set_sfx_volume(d.get("sfx_volume", d.get("volume", 0.8)))
+    sim.set_music_volume(d.get("music_volume", 0.6))
+    sim.set_steer_rate(d.get("steer_rate", sim.steer_rate_frac()))
+    sim.set_drift_assist(d.get("drift_assist", sim.drift_assist_frac()))
+    sim.set_shake_intensity(d.get("shake", sim.shake_intensity_frac()))
+    sim.set_zoom(d.get("zoom", sim.zoom_frac()))
+    sim.INVERT_STEER = bool(d.get("invert_steer", False))
+    sim.set_master_mute(bool(d.get("mute", False)))
+    if "fog_density" in d:
+        sim.set_fog_density(d["fog_density"])
+    sim.TOTAL_LAPS = int(d.get("laps", 3))
 
 def save_profile(d):
     import json
@@ -163,6 +205,8 @@ class Button:
 
 def main():
     global UI_POINTER
+    ensure_local_server()
+    net.prewarm()
     pygame.init()
     screen = pygame.display.set_mode((sim.W, sim.H))
     pygame.display.set_caption("Steer")
@@ -384,28 +428,39 @@ def main():
         else:
             screen.blit(sim.get_font(72).render("STEER", True, (255, 255, 255)), (18, 16))
 
+    def draw_connect_overlay():
+        # full-screen takeover while we're mid-connect, so a slow/cold-starting server reads
+        # as "loading" rather than a frozen or broken menu
+        if netc is None or lobby is not None:
+            return
+        screen.blit(_dim, (0, 0))
+        cx, cy = sim.W / 2, sim.H / 2 - 10
+        ang = (pygame.time.get_ticks() / 1000.0) * 4.0
+        r = 22
+        pygame.draw.arc(screen, UI_ACCENT, pygame.Rect(cx - r, cy - r, r * 2, r * 2), ang, ang + 4.0, 5)
+        waking = netc.waking()
+        title = font.render("Waking the server..." if waking else "Connecting...", True, (255, 255, 255))
+        screen.blit(title, title.get_rect(center=(cx, cy + 62)))
+        if waking:
+            sub = font_small.render("First connect after idle can take up to ~30s", True, (200, 210, 195))
+            screen.blit(sub, sub.get_rect(center=(cx, cy + 94)))
+        secs = font_small.render(f"{int(netc.connect_elapsed())}s", True, (180, 195, 175))
+        screen.blit(secs, secs.get_rect(center=(cx, cy + 118)))
+        hint = font_small.render("ESC to cancel", True, (160, 170, 155))
+        screen.blit(hint, hint.get_rect(center=(cx, sim.H - 24)))
+
     profile = load_profile()
     keybinds = dict(DEFAULT_KEYS)
     keybinds.update({k: int(v) for k, v in profile.get("keys", {}).items() if k in DEFAULT_KEYS})
-    sim.set_sfx_volume(profile.get("sfx_volume", profile.get("volume", 0.8)))
-    sim.set_music_volume(profile.get("music_volume", 0.6))
-    sim.set_steer_rate(profile.get("steer_rate", sim.steer_rate_frac()))
-    sim.set_drift_assist(profile.get("drift_assist", sim.drift_assist_frac()))
-    sim.set_shake_intensity(profile.get("shake", sim.shake_intensity_frac()))
-    sim.set_zoom(profile.get("zoom", sim.zoom_frac()))
-    sim.INVERT_STEER = bool(profile.get("invert_steer", False))
-    sim.set_master_mute(bool(profile.get("mute", False)))
-    if "fog_density" in profile:
-        sim.set_fog_density(profile["fog_density"])
+    apply_profile_to_sim(profile)
     sim.start_music()
-    sim.TOTAL_LAPS = int(profile.get("laps", 3))
     fullscreen = bool(profile.get("fullscreen", False))
     show_fps = bool(profile.get("show_fps", False))
     if fullscreen:
         screen = apply_display(True)
 
     state = "menu"
-    menu_sel = mode_sel = gamemode_sel = mp_sel = 0  # highlighted menu row for controller / keyboard nav
+    menu_sel = mode_sel = gamemode_sel = 0  # highlighted menu row for controller / keyboard nav
     current_seed = sim.ROAD_SEED
     player_name = profile.get("name", "Player")
     _pf = profile.get("flag", "us")
@@ -429,6 +484,7 @@ def main():
     netc = None                 # net.Net while hosting/joined
     lobby = None                # latest room dict from the server
     mp_max = 4                  # host's chosen player cap
+    mp_tab = "host"              # which panel is showing on the combined multiplayer screen
     join_code = ""              # code being typed on the join screen
     net_msg = ""                # status / error line for the MP screens
     pending_net = None          # ("host", max) or ("join", code) to send once connected
@@ -447,8 +503,8 @@ def main():
     start_btn = Button((sim.W / 2 - 100, 256, 200, 42), "Start Race")
     flag_prev = Button((sim.W / 2 - 120, 198, 40, 40), "<")
     flag_next = Button((sim.W / 2 + 80, 198, 40, 40), ">")
-    host_btn = Button((sim.W / 2 - 110, 120, 220, 48), "Host Game")
-    join_btn = Button((sim.W / 2 - 110, 182, 220, 48), "Join Game")
+    host_btn = Button((sim.W / 2 - 160, 90, 150, 40), "HOST")
+    join_btn = Button((sim.W / 2 + 10, 90, 150, 40), "JOIN")
     sp_btn = Button((sim.W / 2 - 110, 120, 220, 48), "Singleplayer")
     mp_btn = Button((sim.W / 2 - 110, 182, 220, 48), "Multiplayer")
     minus_btn = Button((sim.W / 2 - 100, 198, 40, 40), "-")   # left of the number, no overlap
@@ -569,6 +625,7 @@ def main():
     def reload_and_migrate():
         nonlocal cars, player, cam
         if try_reload():
+            apply_profile_to_sim(profile)
             sim.new_map(current_seed)
             slot = cars.index(player)
             cars = [migrate_car(c) for c in cars]
@@ -601,6 +658,8 @@ def main():
         if netc is not None:
             netc.close()
         netc, lobby, online, my_ready = None, None, False, False
+        sim.NET_ROLE = "off"        # else the menu backdrop keeps queueing "host" box pickups
+        sim.BOX_EVENTS.clear()      # that the next hosted race would broadcast to everyone
 
     def is_host():
         return bool(lobby) and lobby.get("host") == lobby.get("self")
@@ -706,10 +765,14 @@ def main():
             mm, sm = main_mtime, last_mtime
         if mm != main_mtime:
             restart()
-        if sm != last_mtime and state != "playing":
+        if sm != last_mtime and state != "playing" and player is None:
+            # (with a race paused this waits: the in-race check reloads it properly on Resume,
+            # rebuilding that race's track -- reloading here would wipe it and crash on Resume)
             last_mtime = sm
-            if try_reload() and state in MENU_STATES and player is None:
-                setup_attract()
+            if try_reload():
+                apply_profile_to_sim(profile)
+                if state in MENU_STATES:
+                    setup_attract()
 
         # advance the live menu backdrop (only when no race is in progress to resume)
         if state in MENU_STATES and player is None:
@@ -737,14 +800,12 @@ def main():
                     state = "mp_menu"
                 elif mt == "err":
                     net_msg = m.get("msg", "Error")
-                    if state in ("host_setup", "join_entry"):
-                        pass
                 elif mt == "room":
                     prev_self = lobby.get("self") if lobby else None
                     lobby = m
                     if "self" not in lobby and prev_self is not None:
                         lobby["self"] = prev_self   # server only sends self on the first ack
-                    if not m.get("started") and state in ("host_setup", "join_entry", "lobby"):
+                    if not m.get("started") and state in ("mp_menu", "lobby"):
                         state = "lobby"
                     elif online and is_host() and sim.NET_ROLE == "client":
                         # the host left mid-race and I was promoted: take over bots + boxes
@@ -804,7 +865,6 @@ def main():
             gamemode_buttons.append((mk, Button((sim.W / 2 - 110, gy, 220, 36), mlabel)))
             gy += 42
         gamemode_sel = max(0, min(gamemode_sel, len(gamemode_buttons)))
-        mp_sel = max(0, min(mp_sel, 2))
 
         # Mouse hover updates selection index so keyboard and pointer stay synchronized
         if state == "menu":
@@ -824,18 +884,13 @@ def main():
                     break
             if back_btn.clicked(mouse_pos):
                 gamemode_sel = len(gamemode_buttons)
-        elif state == "mp_menu":
-            if host_btn.clicked(mouse_pos):
-                mp_sel = 0
-            elif join_btn.clicked(mouse_pos):
-                mp_sel = 1
-            elif back_btn.clicked(mouse_pos):
-                mp_sel = 2
 
         action = None   # the player's bash this frame, if any
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 running = False
+            elif event.type == sim.MUSIC_END:
+                sim.next_track()
             elif event.type == pygame.KEYDOWN:
                 if state == "settings" and awaiting_key is not None:
                     if event.key != pygame.K_ESCAPE:    # Esc cancels the rebind
@@ -844,7 +899,7 @@ def main():
                         save_profile(profile)
                     awaiting_key = None
                     continue
-                if event.key == pygame.K_m:         # global mute toggle
+                if event.key == pygame.K_m and state not in ("name_entry", "join_entry"):   # global mute toggle (not while typing)
                     sim.set_master_mute(not sim.MASTER_MUTE)
                     profile["mute"] = sim.MASTER_MUTE
                     save_profile(profile)
@@ -896,7 +951,7 @@ def main():
                             gamemode_sel = 0
                             state = "gamemode"
                         elif nm == "multi":
-                            mp_sel = 0
+                            mp_tab, net_msg = "host", ""
                             state = "mp_menu"
                         elif nm == "back":
                             state = "menu"
@@ -917,20 +972,28 @@ def main():
                     elif event.key == pygame.K_ESCAPE:
                         state = "mode"
                 elif state == "mp_menu":
-                    if event.key in (pygame.K_DOWN, pygame.K_s):
-                        mp_sel = (mp_sel + 1) % 3
-                    elif event.key in (pygame.K_UP, pygame.K_w):
-                        mp_sel = (mp_sel - 1) % 3
-                    elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
-                        if mp_sel == 0:
-                            state = "host_setup"
-                        elif mp_sel == 1:
-                            join_code, net_msg = "", ""
-                            state = "join_entry"
-                        elif mp_sel == 2:
-                            state = "mode"
+                    if event.key in (pygame.K_LEFT, pygame.K_a):
+                        mp_tab = "host"
+                    elif event.key in (pygame.K_RIGHT, pygame.K_d):
+                        mp_tab = "join"
+                    elif mp_tab == "host" and event.key in (pygame.K_UP, pygame.K_w):
+                        mp_max = min(12, mp_max + 1)
+                    elif mp_tab == "host" and event.key in (pygame.K_DOWN, pygame.K_s):
+                        mp_max = max(2, mp_max - 1)
+                    elif event.key == pygame.K_RETURN:
+                        if mp_tab == "host":
+                            host_create()
+                        else:
+                            join_create()
                     elif event.key == pygame.K_ESCAPE:
-                        state = "mode"
+                        if netc is not None and lobby is None:
+                            net_disconnect()   # cancel an in-flight connect, stay on this screen
+                        else:
+                            state = "mode"
+                    elif mp_tab == "join" and event.key == pygame.K_BACKSPACE:
+                        join_code = join_code[:-1]
+                    elif mp_tab == "join" and event.unicode and event.unicode.isalnum() and len(join_code) < 6:
+                        join_code += event.unicode.upper()
                 elif state == "name_entry":
                     if event.key == pygame.K_RETURN:
                         confirm_name()
@@ -944,15 +1007,6 @@ def main():
                         flag_idx = (flag_idx + 1) % len(sim.FLAG_CODES)
                     elif event.unicode and event.unicode.isprintable() and len(player_name) < 12:
                         player_name += event.unicode
-                elif state == "join_entry":
-                    if event.key == pygame.K_RETURN:
-                        join_create()
-                    elif event.key == pygame.K_ESCAPE:
-                        state = "mp_menu"
-                    elif event.key == pygame.K_BACKSPACE:
-                        join_code = join_code[:-1]
-                    elif event.unicode and event.unicode.isalnum() and len(join_code) < 6:
-                        join_code += event.unicode.upper()
                 elif state == "settings":
                     if event.key == pygame.K_TAB:
                         settings_tab = "shaders" if settings_tab == "general" else "general"
@@ -985,8 +1039,6 @@ def main():
                 elif event.key == pygame.K_ESCAPE and state == "results":
                     player = None
                     state = "menu"
-                elif event.key == pygame.K_ESCAPE and state in ("host_setup",):
-                    state = "mp_menu"
                 elif event.key == pygame.K_ESCAPE and state == "lobby":
                     net_disconnect()
                     state = "mp_menu"
@@ -1036,26 +1088,22 @@ def main():
                         state = "mode"
                 elif state == "mp_menu":
                     if host_btn.clicked(mouse_pos):
-                        state = "host_setup"
+                        mp_tab = "host"
                     elif join_btn.clicked(mouse_pos):
-                        join_code, net_msg = "", ""
-                        state = "join_entry"
+                        mp_tab = "join"
                     elif back_btn.clicked(mouse_pos):
-                        state = "mode"
-                elif state == "host_setup":
-                    if minus_btn.clicked(mouse_pos):
+                        if netc is not None and lobby is None:
+                            net_disconnect()
+                        else:
+                            state = "mode"
+                    elif mp_tab == "host" and minus_btn.clicked(mouse_pos):
                         mp_max = max(2, mp_max - 1)
-                    elif plus_btn.clicked(mouse_pos):
+                    elif mp_tab == "host" and plus_btn.clicked(mouse_pos):
                         mp_max = min(12, mp_max + 1)
-                    elif create_btn.clicked(mouse_pos):
+                    elif mp_tab == "host" and create_btn.clicked(mouse_pos):
                         host_create()
-                    elif back_btn.clicked(mouse_pos):
-                        state = "mp_menu"
-                elif state == "join_entry":
-                    if confirm_join_btn.clicked(mouse_pos):
+                    elif mp_tab == "join" and confirm_join_btn.clicked(mouse_pos):
                         join_create()
-                    elif back_btn.clicked(mouse_pos):
-                        state = "mp_menu"
                 elif state == "lobby":
                     if ready_btn.clicked(mouse_pos):
                         toggle_ready()
@@ -1164,22 +1212,21 @@ def main():
                     elif b == PAD_BACK:
                         state = "mode"
                 elif state == "mp_menu":
-                    if b == PAD_CONFIRM:
-                        state = "host_setup"
-                    elif b == PAD_BACK:
-                        state = "mode"
-                elif state == "host_setup":
                     if b == PAD_LEFT:
-                        mp_max = max(2, mp_max - 1)
+                        mp_tab = "host"
                     elif b == PAD_RIGHT:
+                        mp_tab = "join"
+                    elif b == PAD_UP and mp_tab == "host":
                         mp_max = min(12, mp_max + 1)
-                    elif b == PAD_CONFIRM:
+                    elif b == PAD_DOWN and mp_tab == "host":
+                        mp_max = max(2, mp_max - 1)
+                    elif b == PAD_CONFIRM and mp_tab == "host":
                         host_create()
                     elif b == PAD_BACK:
-                        state = "mp_menu"
-                elif state == "join_entry":
-                    if b == PAD_BACK:
-                        state = "mp_menu"
+                        if netc is not None and lobby is None:
+                            net_disconnect()
+                        else:
+                            state = "mode"
                 elif state == "lobby":
                     if b == PAD_CONFIRM:
                         toggle_ready()
@@ -1479,45 +1526,34 @@ def main():
         elif state == "mp_menu":
             draw_bg()
             title = font_big.render("MULTIPLAYER", True, (255, 255, 255))
-            screen.blit(title, title.get_rect(center=(sim.W / 2, 60)))
-            host_btn.draw(screen, font, mp_sel == 0)
-            join_btn.draw(screen, font, mp_sel == 1)
-            back_btn.draw(screen, font, mp_sel == 2)
-            if net_msg:
-                msg = font_small.render(net_msg, True, (240, 180, 120))
-                screen.blit(msg, msg.get_rect(center=(sim.W / 2, 262)))
+            screen.blit(title, title.get_rect(center=(sim.W / 2, 50)))
+            host_btn.draw(screen, font, mp_tab == "host")
+            join_btn.draw(screen, font, mp_tab == "join")
+            tabw = pygame.Rect(sim.W / 2 - 160 if mp_tab == "host" else sim.W / 2 + 10, 132, 150, 3)
+            pygame.draw.rect(screen, UI_ACCENT, tabw)
 
-        elif state == "host_setup":
-            draw_bg()
-            title = font_big.render("HOST GAME", True, (255, 255, 255))
-            screen.blit(title, title.get_rect(center=(sim.W / 2, 60)))
-            lbl = font_small.render(f"Lobby: {player_name.strip() or 'Player'}", True, (220, 230, 210))
-            screen.blit(lbl, lbl.get_rect(center=(sim.W / 2, 130)))
-            cap = font_small.render("Max players:", True, (220, 230, 210))
-            screen.blit(cap, cap.get_rect(center=(sim.W / 2, 176)))
-            num = font.render(str(mp_max), True, UI_ACCENT)
-            screen.blit(num, num.get_rect(center=(sim.W / 2, 216)))
-            minus_btn.draw(screen, font, minus_btn.clicked(mouse_pos))
-            plus_btn.draw(screen, font, plus_btn.clicked(mouse_pos))
-            create_btn.draw(screen, font, create_btn.clicked(mouse_pos))
-            back_btn.draw(screen, font, back_btn.clicked(mouse_pos))
-            if net_msg:
-                msg = font_small.render(net_msg, True, (240, 180, 120))
-                screen.blit(msg, msg.get_rect(center=(sim.W / 2, sim.H - 24)))
+            if mp_tab == "host":
+                lbl = font_small.render(f"Lobby: {player_name.strip() or 'Player'}", True, (220, 230, 210))
+                screen.blit(lbl, lbl.get_rect(center=(sim.W / 2, 150)))
+                cap = font_small.render("Max players:", True, (220, 230, 210))
+                screen.blit(cap, cap.get_rect(center=(sim.W / 2, 192)))
+                num = font.render(str(mp_max), True, UI_ACCENT)
+                screen.blit(num, num.get_rect(center=(sim.W / 2, 228)))
+                minus_btn.rect.y = plus_btn.rect.y = 208
+                minus_btn.draw(screen, font, minus_btn.clicked(mouse_pos))
+                plus_btn.draw(screen, font, plus_btn.clicked(mouse_pos))
+                create_btn.draw(screen, font, create_btn.clicked(mouse_pos))
+            else:
+                prompt = font_small.render("Enter 6-character code:", True, (220, 230, 210))
+                screen.blit(prompt, prompt.get_rect(center=(sim.W / 2, 150)))
+                box = pygame.Rect(sim.W / 2 - 150, 176, 300, 48)
+                pygame.draw.rect(screen, (20, 35, 20), box, border_radius=6)
+                pygame.draw.rect(screen, (230, 230, 230), box, 2, border_radius=6)
+                caret = "_" if (pygame.time.get_ticks() // 400) % 2 == 0 else " "
+                codetxt = font_big.render((join_code + caret), True, (255, 255, 255))
+                screen.blit(codetxt, codetxt.get_rect(center=box.center))
+                confirm_join_btn.draw(screen, font, confirm_join_btn.clicked(mouse_pos))
 
-        elif state == "join_entry":
-            draw_bg()
-            title = font_big.render("JOIN GAME", True, (255, 255, 255))
-            screen.blit(title, title.get_rect(center=(sim.W / 2, 60)))
-            prompt = font_small.render("Enter 6-character code:", True, (220, 230, 210))
-            screen.blit(prompt, prompt.get_rect(center=(sim.W / 2, 150)))
-            box = pygame.Rect(sim.W / 2 - 150, 176, 300, 48)
-            pygame.draw.rect(screen, (20, 35, 20), box, border_radius=6)
-            pygame.draw.rect(screen, (230, 230, 230), box, 2, border_radius=6)
-            caret = "_" if (pygame.time.get_ticks() // 400) % 2 == 0 else " "
-            codetxt = font_big.render((join_code + caret), True, (255, 255, 255))
-            screen.blit(codetxt, codetxt.get_rect(center=box.center))
-            confirm_join_btn.draw(screen, font, confirm_join_btn.clicked(mouse_pos))
             back_btn.draw(screen, font, back_btn.clicked(mouse_pos))
             if net_msg:
                 msg = font_small.render(net_msg, True, (240, 180, 120))
@@ -1559,9 +1595,8 @@ def main():
                 tip = "All players ready -> race starts automatically"
                 screen.blit(font_small.render(tip, True, (180, 200, 180)),
                             (sim.W / 2 - 180, sim.H - 24))
-            else:
-                wait = font_small.render(net_msg or "Connecting...", True, (220, 220, 220))
-                screen.blit(wait, wait.get_rect(center=(sim.W / 2, sim.H / 2)))
+
+        draw_connect_overlay()
 
         if show_fps:
             fps = font_small.render(f"{clock.get_fps():.0f} FPS", True, (255, 210, 70))

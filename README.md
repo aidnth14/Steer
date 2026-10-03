@@ -110,11 +110,14 @@ Run a local cluster with Docker:
 
 ```
 docker compose up --build --scale server=3   # 3 server replicas + redis, shared lobbies
-# clients: STEER_SERVER_URL=ws://localhost:8765 python main.py
+# each replica has its own port: host via one, join via another to test shared lobbies
+STEER_SERVER_URL=ws://localhost:8765 python main.py    # player 1 (hosts)
+STEER_SERVER_URL=ws://localhost:8766 python main.py    # player 2 (joins the code)
 ```
 
 On Render, keep the Key Value service from `render.yaml` and set the web service's instance
-count > 1 to scale out.
+count > 1 to scale out. That needs a paid instance type: Render's free plan runs one instance
+only, so on the free plan Redis adds nothing (the server works the same without it).
 
 ### How the netcode works
 

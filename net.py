@@ -13,10 +13,29 @@ import os
 import queue
 import threading
 import time
+import urllib.request
+from urllib.parse import urlparse
 
 import websockets
 
 DEFAULT_URL = os.environ.get("STEER_SERVER_URL", "ws://localhost:8765")
+
+
+def prewarm(url=None):
+    # Render's free plan spins a server down after idle and takes ~30s to cold-start on the
+    # next request. Fire a one-shot HTTP ping at game launch (not when the player clicks
+    # Host/Join) so that wait mostly happens in the background while they're in the menus.
+    target = url or DEFAULT_URL
+    if urlparse(target).hostname in ("localhost", "127.0.0.1", None):
+        return
+    http_url = target.replace("wss://", "https://").replace("ws://", "http://")
+
+    def _ping():
+        try:
+            urllib.request.urlopen(http_url, timeout=35)
+        except Exception:
+            pass
+    threading.Thread(target=_ping, daemon=True).start()
 
 
 class Net:
@@ -42,6 +61,9 @@ class Net:
         # Render's free plan can take up to a minute to wake from idle; tell the UI if the
         # connection is taking a while so it can say so
         return self.status == "connecting" and (time.monotonic() - self._connect_t) > 5.0
+
+    def connect_elapsed(self):
+        return time.monotonic() - self._connect_t if self._connect_t else 0.0
 
     def send(self, obj):
         loop, out = self._loop, self._out

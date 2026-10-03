@@ -6,3 +6,4 @@ venv/
 shot_*.png
 shots/
 assets/sound/music/
+server.log

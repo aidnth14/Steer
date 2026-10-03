@@ -327,17 +327,22 @@ async def bus_listener():
             obj = json.loads(message["data"])
         except (ValueError, TypeError, KeyError):
             continue
-        t = obj.get("t")
-        if t == "deliver":                      # edge: send to a local socket
-            await send_to_cid(obj["cid"], obj["data"])
-        elif t == "close":
-            await close_cid(obj["cid"])
-        elif t == "edge_join":                  # owner: a client joined via another instance
-            await owner_add_player(obj["code"], obj["inst"], obj["cid"], obj.get("name"), obj.get("flag"))
-        elif t == "edge_frame":
-            await owner_handle_frame(obj["code"], obj["inst"], obj["cid"], obj["msg"])
-        elif t == "edge_leave":
-            await owner_remove_player(obj["code"], obj["inst"], obj["cid"])
+        # one bad message must not kill this loop: it's the only thing routing cross-instance
+        # traffic, and if it dies this instance silently stops serving shared lobbies
+        try:
+            t = obj.get("t")
+            if t == "deliver":                      # edge: send to a local socket
+                await send_to_cid(obj["cid"], obj["data"])
+            elif t == "close":
+                await close_cid(obj["cid"])
+            elif t == "edge_join":                  # owner: a client joined via another instance
+                await owner_add_player(obj["code"], obj["inst"], obj["cid"], obj.get("name"), obj.get("flag"))
+            elif t == "edge_frame":
+                await owner_handle_frame(obj["code"], obj["inst"], obj["cid"], obj["msg"])
+            elif t == "edge_leave":
+                await owner_remove_player(obj["code"], obj["inst"], obj["cid"])
+        except Exception as e:
+            print("bus message failed, skipped:", type(e).__name__, e)
 
 
 # =====================================================================================

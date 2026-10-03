@@ -21,6 +21,7 @@ EDGE_GRACE = 6.0      # px a car's centre may stray past the last road tile befo
 # fence pieces in assets/fence_tiles/ (two fences, one each side of the road, as barriers).
 TILE = 16                       # px size of one tile, and of one cell of the track grid
 GRID_N = WORLD // TILE          # world is a GRID_N x GRID_N grid of cells (keep WORLD a multiple of TILE)
+ROOT_DIR = os.path.dirname(os.path.abspath(__file__))   # load_assets falls back to ROOT_DIR/assets
 ASSET_DIR = os.path.join(os.path.dirname(__file__), "assets")
 TRACK_TILE_DIR = os.path.join(ASSET_DIR, "track_tiles")
 TRACK_TILE_NAMES = [            # [row][col]; row 0 = grass above, col 0 = grass to the left
@@ -118,6 +119,39 @@ SFX_MUTED = False       # True while in menus / attract mode -> silence all SFX
 MASTER_MUTE = False     # player's global mute toggle (silences SFX + music)
 _music_loaded = False
 MUSIC_FILES = ("music.mp3", "music.ogg", "music.wav", "theme.mp3", "theme.ogg")
+MUSIC_DIR = os.path.join(SOUND_DIR, "music")
+MUSIC_END = pygame.USEREVENT + 1   # posted by pygame.mixer.music when a track finishes
+_playlist = []
+_playlist_i = 0
+
+def _build_playlist():
+    tracks = []
+    if os.path.isdir(MUSIC_DIR):
+        for fn in sorted(os.listdir(MUSIC_DIR)):
+            if fn.lower().endswith((".mp3", ".ogg", ".wav")):
+                tracks.append(os.path.join(MUSIC_DIR, fn))
+    random.shuffle(tracks)
+    return tracks
+
+def _play_track(path):
+    try:
+        pygame.mixer.music.load(path)
+        pygame.mixer.music.set_volume(0.0 if MASTER_MUTE else MUSIC_VOLUME)
+        pygame.mixer.music.set_endevent(MUSIC_END)
+        pygame.mixer.music.play()
+    except pygame.error:
+        pass
+
+def next_track():
+    # advances the shuffled playlist; called on MUSIC_END, reshuffles when it wraps
+    global _playlist, _playlist_i
+    if not _playlist:
+        return
+    _playlist_i += 1
+    if _playlist_i >= len(_playlist):
+        _playlist_i = 0
+        random.shuffle(_playlist)
+    _play_track(_playlist[_playlist_i])
 
 def load_sounds():
     SOUNDS.clear()
@@ -147,9 +181,16 @@ def set_music_volume(v):
             pass
 
 def start_music():
-    # loops an optional soundtrack if one is dropped into assets/sound (music.* / theme.*)
-    global _music_loaded
+    # plays a shuffled loop through assets/sound/music/*, falling back to a single
+    # dropped-in soundtrack (music.* / theme.*) if no playlist is present
+    global _music_loaded, _playlist, _playlist_i
     if not _mixer_ready or _music_loaded:
+        return
+    _playlist = _build_playlist()
+    if _playlist:
+        _playlist_i = 0
+        _play_track(_playlist[_playlist_i])
+        _music_loaded = True
         return
     for fn in MUSIC_FILES:
         p = os.path.join(SOUND_DIR, fn)
@@ -1683,6 +1724,7 @@ def new_map(seed):
     build_ground()
     _build_minimap()
     spawn_boxes()
+    del BOX_EVENTS[:]   # pickups from a previous map (e.g. the menu backdrop) must never be broadcast
     del PARTICLES[:]
     del FX[:]
     del PROJECTILES[:]
@@ -3052,6 +3094,13 @@ def spawn_destructibles(rng=None):
                 if dx * dx + dy * dy < 30.0 * 30.0:
                     too_close = True
                     break
+            if not too_close:
+                for e in DESTRUCTIBLES:
+                    dx = wrap_delta(pos_x, e["x"])
+                    dy = wrap_delta(pos_y, e["y"])
+                    if dx * dx + dy * dy < 30.0 * 30.0:
+                        too_close = True
+                        break
             if too_close:
                 continue
             k = cluster_kind if r.random() < 0.65 else r.choice(kinds)
