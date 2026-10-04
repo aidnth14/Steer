@@ -1,0 +1,37 @@
+name: keepalive
+
+# Keep the free Render server warm so players don't hit the ~30s cold start.
+# Render free web services sleep after 15 min idle. We ping the health endpoint every ~10 min
+# during a daily active window (04:00-23:59 UTC, ~20h/day ≈ 620h/month) which keeps it awake
+# through the world's waking hours while staying comfortably under the free monthly run-time
+# allowance. The in-game loading screen covers the rare cold start during the quiet window.
+#
+# Note: GitHub disables scheduled workflows after 60 days with no repo commits; an occasional
+# push (or the manual "Run workflow" button) re-arms it. Cron timing can drift a few minutes.
+
+on:
+  schedule:
+    - cron: "*/10 4-23 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: keepalive
+  cancel-in-progress: false
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Wake the Steer server
+        run: |
+          URL="https://steer-server.onrender.com/"
+          echo "Pinging $URL"
+          # retry a few times: the very first hit after sleep returns once it has woken (~30s)
+          for i in 1 2 3; do
+            code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 60 "$URL" || echo "000")
+            echo "attempt $i -> HTTP $code"
+            [ "$code" = "200" ] && exit 0
+            sleep 5
+          done
+          echo "server did not return 200 after retries" >&2
+          exit 1

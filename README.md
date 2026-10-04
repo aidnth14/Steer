@@ -125,26 +125,32 @@ stays in sync.
 - **Join:** type a friend's 6-character code. Joiners see the host's synchronized match settings updated in real time.
 - In the **lobby** everyone sees the player list (name + flag + ready state) and the active match settings. When every player is ready (min 2), the race **starts automatically** with the host's custom settings on the same track for all.
 
-### Running the server
+### Live server
+
+The game ships pointed at a **live Render deployment**: `wss://steer-server.onrender.com`
+(baked into `server_url.txt`). Just launch the game, pick Multiplayer, and Host/Join — no setup.
+Load-tested at 10 concurrent lobbies (40 players) with zero errors on Render's free tier, which
+sits behind Render's managed load balancer + TLS. A GitHub Actions keep-alive
+(`.github/workflows/keepalive.yml`) pings the health endpoint through the day's active hours so
+the free instance rarely sleeps; the in-game loading screen masks the ~30s cold start on the rare
+occasion it does.
+
+**Server URL resolution (client):** `STEER_SERVER_URL` env → `server_url.txt` → `ws://localhost:8765`.
+
+### Running the server yourself
 
 Locally:
 
 ```
 PORT=8765 python server.py
-# then point the game at it:
+# point the game at your local server (env overrides server_url.txt):
 STEER_SERVER_URL=ws://localhost:8765 python main.py
 ```
 
-On **Render** (free): push this repo to GitHub → Render → **New → Blueprint** → pick the
-repo (`render.yaml` provisions a Web Service running `server.py`, plus an optional Key
-Value/Redis instance). Render gives you a URL like `https://steer-server.onrender.com`;
-players then launch with:
-
-```
-STEER_SERVER_URL=wss://steer-server.onrender.com python main.py
-```
-
-(The client reads `STEER_SERVER_URL`; default is `ws://localhost:8765`.)
+On **Render**: push to GitHub → Render → **New → Blueprint** → pick the repo (`render.yaml`
+provisions a free Web Service running `server.py`). Render hands you `https://<name>.onrender.com`;
+put its `wss://` form in `server_url.txt` (or set `STEER_SERVER_URL`). For horizontal scaling,
+uncomment the Key Value/Redis + multi-instance block in `render.yaml` (requires a paid plan).
 
 ### Scaling with Redis + Docker (optional)
 
