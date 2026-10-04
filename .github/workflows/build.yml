@@ -9,10 +9,16 @@ on:
   push:
     tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      only_android:
+        description: "Build only the Android APK (skip desktop targets)"
+        type: boolean
+        default: false
 
 jobs:
   desktop:
     name: ${{ matrix.name }}
+    if: ${{ inputs.only_android != true }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -45,10 +51,14 @@ jobs:
       - name: Install Buildozer toolchain
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential git zip unzip openjdk-17-jdk \
-            autoconf libtool pkg-config zlib1g-dev libncurses-dev libffi-dev libssl-dev
+          # full autotools set: libffi's recipe autoreconf needs libtool's .m4 macros
+          # (LT_SYS_SYMBOL_USCORE), gettext/autopoint, and automake
+          sudo apt-get install -y build-essential git zip unzip openjdk-17-jdk ccache \
+            autoconf automake libtool libtool-bin libltdl-dev m4 pkg-config \
+            autopoint gettext zlib1g-dev libncurses-dev libffi-dev libssl-dev
           python -m pip install --upgrade pip
-          python -m pip install buildozer cython
+          # pin a known-good buildozer/cython combo (newer p4a defaults pull an unstable Python)
+          python -m pip install "buildozer==1.5.0" "cython==0.29.36"
       - name: Build debug APK
         run: buildozer -v android debug
       - uses: actions/upload-artifact@v4
