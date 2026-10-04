@@ -1,0 +1,3 @@
+# The multiplayer server the game client connects to. net.py reads this (unless STEER_SERVER_URL
+# is set). Lines starting with # are ignored. Ships alongside the game so builds auto-connect.
+wss://steer-server.onrender.com

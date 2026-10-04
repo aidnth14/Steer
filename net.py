@@ -27,9 +27,10 @@ def _default_url():
         return env.strip()
     try:
         with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "server_url.txt")) as f:
-            url = f.read().strip()
-            if url and not url.startswith("#"):
-                return url
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#"):
+                    return line
     except OSError:
         pass
     return "ws://localhost:8765"
