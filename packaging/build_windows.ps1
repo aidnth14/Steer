@@ -15,5 +15,12 @@ if (Test-Path dist)  { Remove-Item -Recurse -Force dist }
 
 & $py -m PyInstaller packaging\steer.spec --noconfirm --clean
 
+Write-Host ">> Smoke test (headless launch must survive 150 frames without crashing)"
+$env:SDL_VIDEODRIVER = "dummy"; $env:SDL_AUDIODRIVER = "dummy"
+$env:STEER_SMOKE = "150"; $env:STEER_SERVER_URL = "ws://127.0.0.1:1"
+& "dist\Steer\Steer.exe"
+if ($LASTEXITCODE -ne 0) { throw "Smoke test failed (exit $LASTEXITCODE)" }
+Write-Host ">> Smoke test passed."
+
 Write-Host ">> Done. Artifacts in dist\"
 Get-ChildItem dist

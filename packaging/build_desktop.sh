@@ -15,5 +15,10 @@ $PY -m pip install "pygame-ce>=2.5" "websockets>=14" "pyinstaller>=6.0"
 rm -rf build dist
 $PY -m PyInstaller packaging/steer.spec --noconfirm --clean
 
+echo ">> Smoke test (headless launch must survive 150 frames without crashing)"
+if [[ "$(uname)" == "Darwin" ]]; then BIN="dist/Steer.app/Contents/MacOS/Steer"; else BIN="dist/Steer/Steer"; fi
+SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy STEER_SMOKE=150 STEER_SERVER_URL=ws://127.0.0.1:1 "$BIN"
+echo ">> Smoke test passed."
+
 echo ">> Done. Artifacts in dist/"
 ls -la dist

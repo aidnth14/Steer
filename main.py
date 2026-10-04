@@ -1620,7 +1620,14 @@ def main():
     running = True
     last_sel = None             # (state, selections) last frame, for the menu tick sound
     stick_nav_timer = 0.0
+    # STEER_SMOKE=<frames>: run headless for N frames then quit 0 (CI launch self-test)
+    smoke_frames = int(os.environ.get("STEER_SMOKE", "0") or "0")
+    frame_no = 0
     while running:
+        frame_no += 1
+        if smoke_frames and frame_no >= smoke_frames:
+            print(f"SMOKE OK: survived {frame_no} frames")
+            running = False
         fps_target = 60
         if fps_cap_setting == "120 FPS":
             fps_target = 120
