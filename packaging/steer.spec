@@ -27,14 +27,31 @@ STRIP = sys.platform != "win32"                 # strip is a no-op/harmful on Wi
 EXCLUDES = [
     "tkinter", "redis", "numpy", "pytest", "_pytest", "setuptools", "pip", "wheel",
     "unittest", "pydoc", "doctest", "lib2to3", "distutils", "test", "xmlrpc",
-    "plyer",            # Android-only gyro backend; desktop uses SDL sensors / none
+    "plyer",                        # Android-only gyro backend; desktop uses SDL sensors / none
+    "cffi", "_cffi_backend", "pycparser",   # not used by the game; arm64-only .so blocks x86_64
+    "cryptography",                          # ditto: arm64-only _rust .so, game never imports it
+    "websockets.speedups",                   # optional C accel; pure-Python fallback is fine
 ]
+
+# Some asset subtrees (flags, sfx, music, button icons) are symlinks to an external store.
+# os.walk(followlinks=True) resolves them to real files so the bundle is COMPLETE -- otherwise
+# PyInstaller stores dangling symlinks and the app ships without flags/audio/icons.
+def _collect_assets(root):
+    root = str(root)
+    parent = os.path.dirname(root)
+    out = []
+    for dirpath, _dirs, files in os.walk(root, followlinks=True):
+        for fn in files:
+            if fn == ".DS_Store":
+                continue
+            out.append((os.path.join(dirpath, fn), os.path.relpath(dirpath, parent)))
+    return out
 
 a = Analysis(
     [str(ROOT / "main.py")],
     pathex=[str(ROOT)],
     binaries=[],
-    datas=[(str(ROOT / "assets"), "assets")],   # whole asset tree -> <bundle>/assets
+    datas=_collect_assets(ROOT / "assets"),     # real files behind every symlink -> <bundle>/assets/...
     hiddenimports=["pygame._sdl2", "pygame._sdl2.controller"],
     hookspath=[],
     runtime_hooks=[],
