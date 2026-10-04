@@ -794,14 +794,14 @@ def main():
     active_slider = None        # the slider dict currently being dragged, or None
     # general-tab toggles (middle column)
     TGL_X = 210
-    inv_btn = Button((TGL_X, 70, 170, 26), "")
-    mute_btn = Button((TGL_X, 104, 170, 26), "")
-    fs_btn = Button((TGL_X, 138, 170, 26), "")
-    fps_btn = Button((TGL_X, 172, 170, 26), "")
-    aggr_btn = Button((TGL_X, 206, 170, 26), "")
-    laps_btn = Button((TGL_X, 240, 170, 26), "")
-    hud_btn = Button((TGL_X, 274, 170, 26), "")
-    track_btn = Button((TGL_X, 308, 170, 26), "")
+    inv_btn = Button((TGL_X, 64, 170, 25), "")
+    mute_btn = Button((TGL_X, 95, 170, 25), "")
+    fs_btn = Button((TGL_X, 126, 170, 25), "")
+    fps_btn = Button((TGL_X, 157, 170, 25), "")
+    aggr_btn = Button((TGL_X, 188, 170, 25), "")
+    laps_btn = Button((TGL_X, 219, 170, 25), "")
+    hud_btn = Button((TGL_X, 250, 170, 25), "")
+    track_btn = Button((TGL_X, 281, 170, 25), "")
 
     settings_tab = "general"
     shader_sel = 0
@@ -811,7 +811,7 @@ def main():
     shd_row_btns = [
         Button((sim.W / 2 + 10, 74 + i * 38, 165, 32), "") for i in range(5)
     ]
-    settings_back_btn = Button((sim.W / 2 - 80, 344, 160, 36), "Back")
+    settings_back_btn = Button((sim.W // 2 - 80, 344, 160, 34), "Back")
 
     SHADER_DESCRIPTIONS = {
         "CINEMATIC": "Atmospheric mist + soft vignette corners",
@@ -1578,7 +1578,7 @@ def main():
                                     netc.send({"t": "kick", "id": p["id"]})
                                     break
                 elif state == "settings":
-                    if back_btn.clicked(mouse_pos):
+                    if settings_back_btn.clicked(mouse_pos) or back_btn.clicked(mouse_pos):
                         save_profile(profile)
                         state = "menu"
                     elif inv_btn.clicked(mouse_pos):
@@ -2421,9 +2421,9 @@ def main():
                 if p_icon:
                     screen.blit(p_icon, p_icon.get_rect(midright=(sim.W - 20, py_pos + 8)))
             back_is_sel = (pads and settings_sel == 15)
-            back_btn.draw(screen, font, back_btn.clicked(mouse_pos) or back_is_sel)
+            settings_back_btn.draw(screen, font, settings_back_btn.clicked(mouse_pos) or back_is_sel)
             if back_is_sel:
-                pygame.draw.rect(screen, (255, 230, 70), back_btn.rect.inflate(8, 8), 2, border_radius=6)
+                pygame.draw.rect(screen, (255, 230, 70), settings_back_btn.rect.inflate(8, 8), 2, border_radius=6)
 
         elif state == "results":
             draw_bg()
