@@ -60,6 +60,14 @@ PAD_R3 = pygame.CONTROLLER_BUTTON_RIGHTSTICK
 
 SIM_PATH = os.path.join(os.path.dirname(__file__), "sim.py")
 MAIN_PATH = os.path.abspath(__file__)
+# Frozen (PyInstaller) builds have no .py source on disk, so the live hot-reload must be off.
+FROZEN = bool(getattr(sys, "frozen", False))
+
+def _safe_mtime(path):
+    try:
+        return os.path.getmtime(path)
+    except OSError:
+        return 0.0
 SERVER_PATH = os.path.join(os.path.dirname(__file__), "server.py")
 PROFILE_PATH = os.path.join(os.path.expanduser("~"), ".steer_profile.json")
 
@@ -543,12 +551,27 @@ def main():
     sdlctrl.init()
     pads = {}       # instance id -> open Controller
 
+    def _pad_name(pad, device_index):
+        # pygame-ce exposes Controller.name; classic pygame has module-level name_forindex.
+        nm = getattr(pad, "name", None)
+        if callable(nm):
+            try:
+                nm = nm()
+            except Exception:
+                nm = None
+        if not nm and hasattr(sdlctrl, "name_forindex"):
+            try:
+                nm = sdlctrl.name_forindex(device_index)
+            except Exception:
+                nm = None
+        return nm or "controller"
+
     def open_pad(device_index):
         if not sdlctrl.is_controller(device_index):
             return
         pad = sdlctrl.Controller(device_index)
         pads[pad.id] = pad
-        print("controller connected:", sdlctrl.name_forindex(device_index))
+        print("controller connected:", _pad_name(pad, device_index))
 
     for i in range(sdlctrl.get_count()):
         open_pad(i)
@@ -1358,8 +1381,8 @@ def main():
     cars, player, cam = [], None, None
     attract_cars, attract_cam = [], None    # live bots racing behind the menu
     final_order = []        # frozen leaderboard shown on the results screen
-    last_mtime = os.path.getmtime(SIM_PATH)
-    main_mtime = os.path.getmtime(MAIN_PATH)
+    last_mtime = _safe_mtime(SIM_PATH)
+    main_mtime = _safe_mtime(MAIN_PATH)
 
     def restart():
         # relaunch the whole process so edits to main.py (menus / UI / game loop) take effect
@@ -1613,11 +1636,8 @@ def main():
         # hot reload: main.py edits restart the process; sim.py edits reload live. In a race,
         # sim.py is handled below (state carries over); everywhere else, reload it in place so
         # menu / HUD draw-code changes show without a restart.
-        try:
-            mm, sm = os.path.getmtime(MAIN_PATH), os.path.getmtime(SIM_PATH)
-        except OSError:
-            mm, sm = main_mtime, last_mtime
-        if mm != main_mtime:
+        mm, sm = (_safe_mtime(MAIN_PATH), _safe_mtime(SIM_PATH)) if not FROZEN else (main_mtime, last_mtime)
+        if not FROZEN and mm and mm != main_mtime:
             restart()
         if sm != last_mtime and state != "playing" and player is None:
             # (with a race paused this waits: the in-race check reloads it properly on Resume,
@@ -2448,9 +2468,9 @@ def main():
                 sim.draw_callout_banner(screen)
                 sim.draw_letterbox(screen, letterbox_h)
             else:
-                if not online:      # hot reload only makes sense for the local single-player sim
-                    mtime = os.path.getmtime(SIM_PATH)
-                    if mtime != last_mtime:
+                if not online and not FROZEN:   # hot reload: local single-player, source on disk
+                    mtime = _safe_mtime(SIM_PATH)
+                    if mtime and mtime != last_mtime:
                         last_mtime = mtime
                         reload_and_migrate()
 

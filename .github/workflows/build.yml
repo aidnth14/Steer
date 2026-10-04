@@ -43,16 +43,39 @@ jobs:
   android:
     name: android-apk
     runs-on: ubuntu-latest
+    env:
+      ANDROID_HOME: ${{ github.workspace }}/android-sdk
+      ANDROID_SDK_ROOT: ${{ github.workspace }}/android-sdk
     steps:
       - uses: actions/checkout@v4
-      # Build inside the maintained Kivy/Buildozer Docker image: it ships a tested combo of
-      # SDK + NDK + JDK + Python + python-for-android, which sidesteps the SDK-manager / JDK /
-      # libffi / Python-version breakage of hand-rolling the toolchain on a bare runner.
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: "17" }
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+      - name: System build deps
+        run: |
+          sudo apt-get update
+          # libffi recipe autoreconf needs libtool's .m4 macros (LT_SYS_SYMBOL_USCORE)
+          sudo apt-get install -y build-essential git zip unzip ccache \
+            autoconf automake libtool libtool-bin libltdl-dev m4 pkg-config \
+            autopoint gettext zlib1g-dev libncurses-dev libffi-dev libssl-dev
+      - name: Android cmdline-tools + licenses
+        run: |
+          # modern cmdline-tools so sdkmanager works under JDK 17 (the old tools/bin one doesn't)
+          mkdir -p "$ANDROID_HOME/cmdline-tools"
+          cd "$ANDROID_HOME/cmdline-tools"
+          curl -sL -o t.zip https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
+          unzip -q t.zip && mv cmdline-tools latest && rm t.zip
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null 2>&1 || true
+          echo "$ANDROID_HOME/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
+      - name: Buildozer toolchain
+        run: |
+          python -m pip install --upgrade pip
+          # p4a 2024.1.21 -> Python 3.11 (latest p4a builds 3.14, whose removed longintrepr.h
+          # breaks the pygame recipe). cython pinned to the matching era.
+          python -m pip install "buildozer==1.5.0" "python-for-android==2024.1.21" "cython==0.29.33"
       - name: Build debug APK
-        uses: ArtemSBulgakov/buildozer-action@v1
-        with:
-          command: buildozer android debug
-          buildozer_version: stable
+        run: buildozer -v android debug
       - uses: actions/upload-artifact@v4
         with:
           name: steer-android-apk
