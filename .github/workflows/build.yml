@@ -45,24 +45,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-      - name: Install Buildozer toolchain
-        run: |
-          sudo apt-get update
-          # full autotools set: libffi's recipe autoreconf needs libtool's .m4 macros
-          # (LT_SYS_SYMBOL_USCORE), gettext/autopoint, and automake
-          sudo apt-get install -y build-essential git zip unzip openjdk-17-jdk ccache \
-            autoconf automake libtool libtool-bin libltdl-dev m4 pkg-config \
-            autopoint gettext zlib1g-dev libncurses-dev libffi-dev libssl-dev
-          python -m pip install --upgrade pip
-          # Pin the whole toolchain. buildozer uses the pip-installed python-for-android; the
-          # latest p4a builds Python 3.14 (whose removed longintrepr.h breaks the pygame recipe),
-          # so pin p4a 2024.1.21 -> Python 3.11, which the pygame recipe compiles against.
-          python -m pip install "buildozer==1.5.0" "python-for-android==2024.1.21" "cython==0.29.36"
+      # Build inside the maintained Kivy/Buildozer Docker image: it ships a tested combo of
+      # SDK + NDK + JDK + Python + python-for-android, which sidesteps the SDK-manager / JDK /
+      # libffi / Python-version breakage of hand-rolling the toolchain on a bare runner.
       - name: Build debug APK
-        run: buildozer -v android debug
+        uses: ArtemSBulgakov/buildozer-action@v1
+        with:
+          command: buildozer android debug
+          buildozer_version: stable
       - uses: actions/upload-artifact@v4
         with:
           name: steer-android-apk
