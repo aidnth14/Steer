@@ -270,10 +270,14 @@ def draw_controller_button(screen, controller_type, button_name, pos, state="out
     return get_button_manager().draw_controller_button(screen, controller_type, button_name, pos, state, size, align)
 
 # Backwards compatibility so 'from ui import buttonmanager' works seamlessly
-import types
-_ui_mod = types.ModuleType("ui")
-_ui_mod.buttonmanager = sys.modules[__name__]
-sys.modules.setdefault("ui", _ui_mod)
+try:
+    import ui as _ui_mod
+    _ui_mod.buttonmanager = sys.modules[__name__]
+except ImportError:
+    import types
+    _ui_mod = types.ModuleType("ui")
+    _ui_mod.buttonmanager = sys.modules[__name__]
+    sys.modules.setdefault("ui", _ui_mod)
 sys.modules.setdefault("ui.buttonmanager", sys.modules[__name__])
 
 __all__ = [

@@ -168,37 +168,40 @@ INNER_TILE_NAMES = [            # [qy][qx]: dirt tile with grass only in that co
     ["dirt_inner_tl", "dirt_inner_tr"],
     ["dirt_inner_bl", "dirt_inner_br"],
 ]
-TILESETS = ["meadow_dirt", "asphalt_circuit"]
+TILESETS = ["meadow_dirt", "asphalt_circuit", "canyon_sand", "frost_pass", "harvest_mud", "neon_night"]
 TILESET_TITLES = {
     "meadow_dirt": "Meadow Dirt",
-    "asphalt_circuit": "Grand Prix",
+    "asphalt_circuit": "Grand Prix Circuit",
+    "canyon_sand": "Red Canyon",
+    "frost_pass": "Frost Pass",
+    "harvest_mud": "Harvest Mud",
+    "neon_night": "Neon Night",
 }
 CURRENT_TILESET = "meadow_dirt"
 TRACK_TYPE_MODE = "meadow_dirt"
 SKID_ROAD_COLOR = (46, 28, 22)
+SKID_GRASS_COLOR = (40, 42, 24)
 
 def get_tileset_dir(tileset_name):
-    if tileset_name == "asphalt_circuit":
-        d = os.path.join(ASSET_DIR, "tilesets", "asphalt_circuit", "track_tiles")
-        if os.path.isdir(d):
-            return d
+    d = os.path.join(ASSET_DIR, "tilesets", tileset_name, "track_tiles")
+    if os.path.isdir(d):
+        return d
     fallback = os.path.join(ASSET_DIR, "track_tiles")
     if os.path.isdir(fallback):
         return fallback
-    return os.path.join(ASSET_DIR, "tilesets", tileset_name, "track_tiles")
+    return d
 
 def get_tileset_oil_path(tileset_name):
-    if tileset_name == "asphalt_circuit":
-        p = os.path.join(ASSET_DIR, "tilesets", "asphalt_circuit", "oil_track.png")
-        if os.path.isfile(p):
-            return p
+    p = os.path.join(ASSET_DIR, "tilesets", tileset_name, "oil_track.png")
+    if os.path.isfile(p):
+        return p
     fallback = os.path.join(ASSET_DIR, "track_tiles", "oil_track.png")
     if os.path.isfile(fallback):
         return fallback
     fallback2 = os.path.join(ASSET_DIR, "oil_track.png")
     if os.path.isfile(fallback2):
         return fallback2
-    return os.path.join(ASSET_DIR, "tilesets", tileset_name, "oil_track.png")
+    return p
 
 FENCE_TILE_DIR = os.path.join(ASSET_DIR, "fence_tiles")
 FX_DIR = os.path.join(ASSET_DIR, "fx")
@@ -335,8 +338,11 @@ def init_audio():
     except pygame.error as e:
         print("audio unavailable:", e)
 
-SFX_VOLUME = 0.8        # effect volume (bashes, crashes, pickups)
+MASTER_VOLUME = 1.0     # primary audio bus volume (0.0 to 1.0)
+SFX_VOLUME = 0.8        # combat & world effect volume (bashes, crashes, pickups)
 MUSIC_VOLUME = 0.6      # background music volume
+ENGINE_VOLUME = 0.8     # kart engine RPM loop volume
+UI_VOLUME = 0.8         # menu & UI notification volume
 SFX_MUTED = False       # True while in menus / attract mode -> silence all SFX
 MASTER_MUTE = False     # player's global mute toggle (silences SFX + music)
 _music_loaded = False
@@ -410,19 +416,37 @@ def _apply_sfx_volume():
         for snd in bank:
             snd.set_volume(SFX_VOL.get(key, 0.5) * SFX_VOLUME)
 
+def set_master_volume(v):
+    global MASTER_VOLUME
+    MASTER_VOLUME = max(0.0, min(1.0, float(v)))
+    set_sfx_volume(SFX_VOLUME)
+    if _mixer_ready:
+        try:
+            pygame.mixer.music.set_volume(0.0 if MASTER_MUTE else MUSIC_VOLUME * MASTER_VOLUME)
+        except pygame.error:
+            pass
+
+def set_engine_volume(v):
+    global ENGINE_VOLUME
+    ENGINE_VOLUME = max(0.0, min(1.0, float(v)))
+
+def set_ui_volume(v):
+    global UI_VOLUME
+    UI_VOLUME = max(0.0, min(1.0, float(v)))
+
 def set_sfx_volume(v):
     global SFX_VOLUME
-    SFX_VOLUME = max(0.0, min(1.0, v))
+    SFX_VOLUME = max(0.0, min(1.0, float(v)))
     for key, s in SOUNDS.items():
-        s.set_volume(SOUND_VOL.get(key, 0.6) * SFX_VOLUME)
+        s.set_volume(SOUND_VOL.get(key, 0.6) * SFX_VOLUME * MASTER_VOLUME)
     _apply_sfx_volume()
 
 def set_music_volume(v):
     global MUSIC_VOLUME
-    MUSIC_VOLUME = max(0.0, min(1.0, v))
+    MUSIC_VOLUME = max(0.0, min(1.0, float(v)))
     if _mixer_ready:
         try:
-            pygame.mixer.music.set_volume(MUSIC_VOLUME)
+            pygame.mixer.music.set_volume(0.0 if MASTER_MUTE else MUSIC_VOLUME * MASTER_VOLUME)
         except pygame.error:
             pass
 
@@ -439,6 +463,10 @@ def start_music():
             gp = [i for i, t in enumerate(_playlist) if "07_grand_prix" in t]
             if gp:
                 _playlist_i = gp[0]
+        elif CURRENT_TILESET == "frost_pass":
+            fp = [i for i, t in enumerate(_playlist) if "05_pursuit" in t]
+            if fp:
+                _playlist_i = fp[0]
         _play_track(_playlist[_playlist_i])
         _music_loaded = True
         return
@@ -459,11 +487,11 @@ def set_master_mute(on):
     MASTER_MUTE = bool(on)
     if _mixer_ready:
         try:
-            pygame.mixer.music.set_volume(0.0 if MASTER_MUTE else MUSIC_VOLUME)
+            pygame.mixer.music.set_volume(0.0 if MASTER_MUTE else MUSIC_VOLUME * MASTER_VOLUME)
         except pygame.error:
             pass
 
-def _emit(name, vol=1.0, pan=0.0):
+def _emit(name, vol=1.0, pan=0.0, bus="sfx"):
     now = time.monotonic()
     cd = SFX_COOLDOWN.get(name, 0.0)
     if cd and now - _SFX_LAST.get(name, -9.0) < cd:
@@ -479,7 +507,9 @@ def _emit(name, vol=1.0, pan=0.0):
             # constant-power pan, -1 = left, +1 = right (always set: channels keep their
             # last volume between sounds)
             a = (max(-1.0, min(1.0, pan)) + 1) * math.pi / 4
-            ch.set_volume(min(1.0, vol * math.cos(a) * 1.414), min(1.0, vol * math.sin(a) * 1.414))
+            bus_vol = UI_VOLUME if bus == "ui" else SFX_VOLUME
+            eff_vol = vol * SFX_VOL.get(name, 0.5) * bus_vol * MASTER_VOLUME
+            ch.set_volume(min(1.0, eff_vol * math.cos(a) * 1.414), min(1.0, eff_vol * math.sin(a) * 1.414))
     except pygame.error:
         pass
 
@@ -487,13 +517,13 @@ def play(name, vol=1.0):
     # gameplay sound (silent in menus / the attract-mode backdrop)
     if SFX_MUTED or MASTER_MUTE:
         return
-    _emit(name, vol)
+    _emit(name, vol, bus="sfx")
 
 def play_ui(name, vol=1.0):
     # menu sounds: these play while the gameplay SFX are muted
     if MASTER_MUTE:
         return
-    _emit(name, vol)
+    _emit(name, vol, bus="ui")
 
 def play_at(name, x, y, vol=1.0):
     # a sound that happens somewhere on the track: quieter with distance from the camera,
@@ -501,7 +531,7 @@ def play_at(name, x, y, vol=1.0):
     if SFX_MUTED or MASTER_MUTE:
         return
     if LISTENER is None:
-        _emit(name, vol)
+        _emit(name, vol, bus="sfx")
         return
     lx, ly, la = LISTENER
     dx, dy = wrap_delta(lx, x), wrap_delta(ly, y)
@@ -511,7 +541,7 @@ def play_at(name, x, y, vol=1.0):
         return
     r = math.radians(la + 90.0)          # the camera's "right", in world space
     pan = (dx * math.cos(r) + dy * math.sin(r)) / 260.0
-    _emit(name, v, pan)
+    _emit(name, v, pan, bus="sfx")
 
 def update_loops(car, dt):
     # continuous sounds for the local kart: engine (4 layers crossfaded by speed), tyre
@@ -524,16 +554,18 @@ def update_loops(car, dt):
         f = min(1.0, speed / MAX_SPEED)
         pos = f * 3.0
         for i in range(4):
-            tgt[f"engine_{i + 1}"] = max(0.0, 1.0 - abs(pos - i)) * (0.6 + 0.4 * f) * LOOP_VOL["engine"]
+            tgt[f"engine_{i + 1}"] = (max(0.0, 1.0 - abs(pos - i)) * (0.6 + 0.4 * f) *
+                                      LOOP_VOL["engine"] * ENGINE_VOLUME * MASTER_VOLUME)
         airborne = getattr(car, "airtime", 0.0) > 0.0
         slip = max(car.slip_r, car.slip_f * 0.8)
         skid = 0.0 if airborne else min(1.0, max(0.0, (slip - SKID_SLIP) / 160.0))
         if car.drift and speed > DRIFT_MIN_SPEED and not airborne:
             skid = max(skid, 0.7)
         off = 0.5 * (car.off_f + car.off_r)
-        tgt["skid_loop"] = skid * (1.0 - 0.7 * off) * LOOP_VOL["skid_loop"]
-        tgt["gravel_loop"] = (0.0 if airborne else off * min(1.0, speed / 120.0)) * LOOP_VOL["gravel_loop"]
-        tgt["boost_loop"] = (1.0 if car.boost_time > 0 else 0.0) * LOOP_VOL["boost_loop"]
+        tgt["skid_loop"] = skid * (1.0 - 0.7 * off) * LOOP_VOL["skid_loop"] * SFX_VOLUME * MASTER_VOLUME
+        tgt["gravel_loop"] = ((0.0 if airborne else off * min(1.0, speed / 120.0)) *
+                              LOOP_VOL["gravel_loop"] * SFX_VOLUME * MASTER_VOLUME)
+        tgt["boost_loop"] = (1.0 if car.boost_time > 0 else 0.0) * LOOP_VOL["boost_loop"] * SFX_VOLUME * MASTER_VOLUME
     k = min(1.0, dt * 12.0)
     for name, (snd, ch) in _LOOPS.items():
         cur = _LOOP_LEVEL.get(name, 0.0)
@@ -762,21 +794,30 @@ BOT_PROFILES = [        # aggression 0..1, how wide they roam, engine pace, weig
 ]
 # auto-assigned bot names (one each, so up to 7 bots never repeat a name)
 BOT_NAMES = ["Brute", "Dash", "Shove", "Rival", "Rook", "Nitro", "Vex", "Blitz", "Turbo", "Crash"]
-BOT_AGGRESSION_LEVELS = ["Chill", "Normal", "Aggressive", "Brutal"]
+BOT_AGGRESSION_LEVELS = ["Chill", "Casual", "Feisty", "Demolition"]
 BOT_AGGRESSION_MULTS = {
     "Chill": 0.55,
+    "Casual": 1.0,
     "Normal": 1.0,
+    "Feisty": 1.45,
     "Aggressive": 1.45,
+    "Demolition": 1.9,
     "Brutal": 1.9,
 }
-BOT_AGGRESSION = "Normal"
+BOT_AGGRESSION = "Casual"
 
 def set_bot_aggression(level):
     global BOT_AGGRESSION
     if isinstance(level, str):
         level = level.capitalize()
+    if level == "Normal":
+        level = "Casual"
+    elif level == "Aggressive":
+        level = "Feisty"
+    elif level == "Brutal":
+        level = "Demolition"
     if level not in BOT_AGGRESSION_MULTS:
-        level = "Normal"
+        level = "Casual"
     BOT_AGGRESSION = level
 
 def get_bot_aggression():
@@ -784,6 +825,25 @@ def get_bot_aggression():
 
 def bot_aggression_mult():
     return BOT_AGGRESSION_MULTS.get(BOT_AGGRESSION, 1.0)
+
+# ---- gameplay & physics settings -----------------------------------------------------------------
+STEER_CURVE = 1.0           # 1.0 (linear) to 2.5 (exponential)
+STICK_DEADZONE = 0.05       # 0.0 to 0.25 (percentage deadzone)
+DYNAMIC_LOOK_AHEAD = False  # camera offset forward along velocity
+GHOST_OPACITY = 0.6         # 0.0 (off) to 1.0 (opaque)
+COLLISION_RULE = "full"     # "full" | "solid" | "ghost"
+SLIPSTREAM_ASSIST = True    # 10% drafting corridor speed boost
+ITEM_RULE = "standard"      # "standard" | "kinetic" | "hazards" | "none"
+BRAKE_ACCEL = 480.0         # braking deceleration
+
+def apply_steer_controls(raw_steer):
+    if abs(raw_steer) < STICK_DEADZONE:
+        return 0.0
+    sign = math.copysign(1.0, raw_steer)
+    mag = (abs(raw_steer) - STICK_DEADZONE) / max(0.001, (1.0 - STICK_DEADZONE))
+    mag = min(1.0, max(0.0, mag))
+    val = sign * (mag ** STEER_CURVE)
+    return -val if INVERT_STEER else val
 
 # ---- start grid ----------------------------------------------------------------------------------
 GRID_START = 24         # road sample the front row starts on (bottom straight)
@@ -933,7 +993,7 @@ def _make_cone_stroked(cone_surf):
 
 def load_track_tileset(tileset_name="meadow_dirt"):
     global CURRENT_TILESET, TRACK_TILE_DIR, TILES, INNER, GRASS_COLOR, DIRT_COLOR
-    global CHECK, CHECK_TILES, OIL_RAW, OIL_TILES, SKID_ROAD_COLOR, ROAD_WIDTH
+    global CHECK, CHECK_TILES, OIL_RAW, OIL_TILES, SKID_ROAD_COLOR, SKID_GRASS_COLOR, ROAD_WIDTH
     if tileset_name not in TILESETS and tileset_name != "random":
         tileset_name = "meadow_dirt"
     if tileset_name == "random":
@@ -943,9 +1003,27 @@ def load_track_tileset(tileset_name="meadow_dirt"):
     TRACK_TILE_DIR = get_tileset_dir(tileset_name)
     if CURRENT_TILESET == "asphalt_circuit":
         SKID_ROAD_COLOR = (16, 18, 28)
+        SKID_GRASS_COLOR = (40, 42, 24)
         ROAD_WIDTH = 288    # 18 tiles (at least 7 tiles, wider for grand prix circuit)
+    elif CURRENT_TILESET == "canyon_sand":
+        SKID_ROAD_COLOR = (180, 140, 70)   # #dab163 loose sand
+        SKID_GRASS_COLOR = (148, 73, 58)   # #94493a canyon rock
+        ROAD_WIDTH = 240
+    elif CURRENT_TILESET == "frost_pass":
+        SKID_ROAD_COLOR = (70, 74, 85)     # #464a55 packed snow skid
+        SKID_GRASS_COLOR = (165, 190, 206) # #a5bece deep snow skid
+        ROAD_WIDTH = 240    # 15 tiles
+    elif CURRENT_TILESET == "harvest_mud":
+        SKID_ROAD_COLOR = (80, 52, 32)     # #6e4c30 dark mud
+        SKID_GRASS_COLOR = (190, 135, 60)  # #ce9248 golden field
+        ROAD_WIDTH = 240
+    elif CURRENT_TILESET == "neon_night":
+        SKID_ROAD_COLOR = (50, 48, 85)     # #3e3b65 slate asphalt
+        SKID_GRASS_COLOR = (23, 21, 36)    # #171524 dark night
+        ROAD_WIDTH = 272
     else:
         SKID_ROAD_COLOR = (46, 28, 22)
+        SKID_GRASS_COLOR = (40, 42, 24)
         ROAD_WIDTH = 240    # 15 tiles (meadow dirt)
 
     grid = [[None] * 3 for _ in range(3)]
@@ -2126,7 +2204,7 @@ def new_map(seed, tileset=None):
     if tileset is not None:
         set_tileset(tileset)
     elif TRACK_TYPE_MODE == "random":
-        chosen = "asphalt_circuit" if (seed % 2 == 1) else "meadow_dirt"
+        chosen = TILESETS[seed % len(TILESETS)]
         set_tileset(chosen)
     elif TRACK_TYPE_MODE in TILESETS:
         set_tileset(TRACK_TYPE_MODE)
@@ -2326,7 +2404,7 @@ class Car:
             elif self.sabotage_cd <= 0:
                 self.sabotage_cd = 1.8
                 return spill_oil(self)
-        elif action_name == "drop_item":
+        elif action_name in ("drop_item", "drop_hazard"):
             if self.item == "cone":
                 res = throw_traffic_cone(self, forward=False)
                 self.item = None
@@ -2368,18 +2446,38 @@ class Car:
         loose = STAGGER_GRIP if self.stagger > 0 else 1.0
         if self.bash_time > 0:
             loose *= BASH_TIRE
-        rear = loose * (DRIFT_GRIP if self.drift else 1.0)      # drifting loosens the rear tyres
+        rear_grip_mult = DRIFT_GRIP if self.drift else 1.0
+        if CURRENT_TILESET == "canyon_sand":
+            rear_grip_mult *= 0.82 if self.drift else 0.90
+        rear = loose * rear_grip_mult      # drifting loosens the rear tyres
         cap_f = GRIP * (1 - self.off_f * (1 - GRASS_GRIP)) * loose * m * AXLE_REAR / WHEELBASE
         cap_r = GRIP * (1 - self.off_r * (1 - GRASS_GRIP)) * rear * m * AXLE_FRONT / WHEELBASE
 
-        # engine: always pushing forward (backs up only while getting unstuck)
+        if CURRENT_TILESET == "canyon_sand":
+            cap_f *= 0.88
+            cap_r *= 0.88
+        elif CURRENT_TILESET == "frost_pass" and not self.drift:
+            # snow/ice physics: near-zero steering authority until counter-steering or drifting kicks in
+            counter_steer = (steer_in * self.steer_angle < -0.04)
+            if not counter_steer:
+                cap_f *= 0.72
+                cap_r *= 0.76
+
+        # engine: forward acceleration, reverse, or braking
         if self.reverse_time > 0:
             drive = -REVERSE_ACCEL * m if v_long > -REVERSE_SPEED else 0.0
+        elif getattr(self, "braking", False):
+            if v_long > 15.0:
+                drive = -BRAKE_ACCEL * m
+            else:
+                drive = -REVERSE_ACCEL * m if v_long > -REVERSE_SPEED else 0.0
         else:
             frac = min(max(v_long, 0.0) / MAX_SPEED, 1.0)
-            boost = (1 + BOOST_PACE) if self.boost_time > 0 else (1 + DRAFT_PACE * self.draft)
+            boost = (1 + BOOST_PACE) if self.boost_time > 0 else (1 + (DRAFT_PACE if SLIPSTREAM_ASSIST else 0.0) * self.draft)
             drive = (ENGINE_ACCEL * m * self.pace * boost * (1 - frac * ENGINE_FALLOFF)
                      * (1 - self.off_r * GRASS_ENGINE_LOSS))
+            if CURRENT_TILESET == "harvest_mud" and (self.off_f > 0.2 or self.off_r > 0.2):
+                drive *= 0.82   # sludge drag
         if self.dead:
             drive = 0.0             # eliminated: coast to a stop
 
@@ -2572,10 +2670,14 @@ class Car:
 
         # Kicked up particles from wheels
         if self.off_r > 0.2 and speed > 50 and self.rng.random() < 0.7:
-            col = (115, 175, 75) if self.off_r > 0.5 else (195, 140, 95)
+            if CURRENT_TILESET == "frost_pass":
+                col = (240, 248, 255) if self.off_r > 0.5 else (165, 190, 206)
+            else:
+                col = (115, 175, 75) if self.off_r > 0.5 else (195, 140, 95)
             spawn_particles(self.x - c * AXLE_REAR, self.y - s * AXLE_REAR, 2, 45, col, 0.45)
         elif self.slip_r > SKID_SLIP * 1.4 and self.rng.random() < 0.6:
-            spawn_particles(self.x - c * AXLE_REAR, self.y - s * AXLE_REAR, 2, 35, (215, 160, 115), 0.45)
+            slip_col = (180, 195, 205) if CURRENT_TILESET == "frost_pass" else (215, 160, 115)
+            spawn_particles(self.x - c * AXLE_REAR, self.y - s * AXLE_REAR, 2, 35, slip_col, 0.45)
 
     def rescue(self):
         # back onto the road beside where it got stuck, pointing the right way, at rest
@@ -2649,6 +2751,8 @@ def _deepest(pts, ux, uy):
     return x0, y0
 
 def _collide_cars(cars):
+    if COLLISION_RULE == "ghost":
+        return
     n = len(cars)
     for i in range(n):
         a = cars[i]
@@ -2729,25 +2833,26 @@ def _resolve_pair(a, b, nx, ny, depth, px, py, dx, dy):
         spawn_sparks(wx, wy, count=min(int(j / 4), 22), speed=210.0, normal=(nx, ny))
 
     # a bash adds an extra shove + loose tyres + spin to whoever it hits, once per bash
-    for basher, victim, sgn, rx, ry in ((a, b, 1, rbx, rby), (b, a, -1, rax, ray)):
-        if basher.bash_time > 0 and victim.uid not in basher.bash_hits:
-            basher.bash_hits.add(victim.uid)
-            kx, ky = nx * sgn * BASH_KNOCK, ny * sgn * BASH_KNOCK
-            victim.vx += kx
-            victim.vy += ky
-            victim.omega += (rx * ky - ry * kx) / (CAR_INERTIA * victim.mass) * BASH_SPIN
-            victim.stagger = STAGGER_TIME
-            victim.flash = 0.25
-            victim.hit_flash = HIT_FLASH            # victim flashes red
-            victim.last_hit_by = basher.uid
-            victim.grudge, victim.grudge_time = basher.uid, 5.0
-            victim.impact = max(victim.impact, BASH_KNOCK * 1.5)
-            victim.impact_vx = kx
-            victim.impact_vy = ky
-            spawn_particles(wx, wy, 18, 160, (255, 240, 160), 0.5)
-            spawn_sparks(wx, wy, count=24, speed=250.0, normal=(nx * sgn, ny * sgn))
-            play_at("bash_hit", wx, wy)
-            victim.bash_sounded = True      # step() skips its generic bump for this hit
+    if COLLISION_RULE != "solid":
+        for basher, victim, sgn, rx, ry in ((a, b, 1, rbx, rby), (b, a, -1, rax, ray)):
+            if basher.bash_time > 0 and victim.uid not in basher.bash_hits:
+                basher.bash_hits.add(victim.uid)
+                kx, ky = nx * sgn * BASH_KNOCK, ny * sgn * BASH_KNOCK
+                victim.vx += kx
+                victim.vy += ky
+                victim.omega += (rx * ky - ry * kx) / (CAR_INERTIA * victim.mass) * BASH_SPIN
+                victim.stagger = STAGGER_TIME
+                victim.flash = 0.25
+                victim.hit_flash = HIT_FLASH            # victim flashes red
+                victim.last_hit_by = basher.uid
+                victim.grudge, victim.grudge_time = basher.uid, 5.0
+                victim.impact = max(victim.impact, BASH_KNOCK * 1.5)
+                victim.impact_vx = kx
+                victim.impact_vy = ky
+                spawn_particles(wx, wy, 18, 160, (255, 240, 160), 0.5)
+                spawn_sparks(wx, wy, count=24, speed=250.0, normal=(nx * sgn, ny * sgn))
+                play_at("bash_hit", wx, wy)
+                victim.bash_sounded = True      # step() skips its generic bump for this hit
 
 def _collide_statics(car):
     near = set()
@@ -2819,16 +2924,19 @@ def _resolve_static(car, nx, ny, depth, px, py):
 # the world step
 # =================================================================================================
 def _ctrl(c):
-    # controls entries may be (steer, action) or (steer, action, drift)
-    return c[0], c[1], (c[2] if len(c) > 2 else False)
+    # controls entries may be (steer, action) or (steer, action, drift) or (steer, action, drift, brake)
+    return (c[0], c[1],
+            (c[2] if len(c) > 2 else False),
+            (c[3] if len(c) > 3 else False))
 
 def step(dt, cars, controls):
-    # controls: one (steer -1..1, action or None[, drift]) per car; action = "left"/"right"/"ram"
+    # controls: one (steer -1..1, action or None[, drift, brake]) per car; action = "left"/"right"/"ram"
     for car, ctrl in zip(cars, controls):
-        steer, action, drift = _ctrl(ctrl)
+        steer, action, drift, brake = _ctrl(ctrl)
         car.prepare()
         car.drift = bool(drift) and not car.dead
-        if action in ("cone", "throw_cone", "drop_cone", "oil", "spill_oil", "item", "drop_item"):
+        car.braking = bool(brake) and not car.dead
+        if action in ("cone", "throw_cone", "drop_cone", "oil", "spill_oil", "item", "drop_item", "drop_hazard"):
             car.use_sabotage(action)
         elif action == "shoot":
             if car.item:
@@ -2933,14 +3041,26 @@ def _spawn_car_fx(car):
     c, s = math.cos(rad), math.sin(rad)
     bx, by = car.x - c * CAR_HL, car.y - s * CAR_HL
     if off > 0.2 and speed > 50 and random.random() < 0.75:
-        col = (115, 175, 75) if off > 0.5 else (195, 140, 95)
+        if CURRENT_TILESET == "frost_pass":
+            col = (235, 245, 255) if random.random() < 0.6 else (165, 190, 206)
+        elif CURRENT_TILESET == "canyon_sand":
+            col = (218, 177, 99) if random.random() < 0.5 else (180, 120, 60)
+        elif CURRENT_TILESET == "harvest_mud":
+            col = (110, 76, 48) if random.random() < 0.5 else (80, 52, 32)
+        elif CURRENT_TILESET == "neon_night":
+            col = (0, 240, 255) if random.random() < 0.5 else (255, 0, 180)
+        else:
+            col = (115, 175, 75) if off > 0.5 else (195, 140, 95)
         spawn_particles(bx, by, 2, 45, col, 0.45)   # kicked-up dust/grass
     if car.drift and speed > DRIFT_MIN_SPEED:
         f = min(1.0, car.drift_charge / DRIFT_MAX_CHARGE)
         for side in (-1, 1):
             tx = car.x - c * AXLE_REAR - s * side * WHEEL_Y
             ty = car.y - s * AXLE_REAR + c * side * WHEEL_Y
-            if f < 0.5:
+            if CURRENT_TILESET == "neon_night":
+                col = (0, 240, 255) if random.random() < 0.5 else (255, 0, 180)
+                cnt = 2 if f < 0.6 else 3
+            elif f < 0.5:
                 col = (245, 245, 250) if random.random() < 0.7 else (255, 215, 130)
                 cnt = 2
             elif f < 0.9:
@@ -3034,25 +3154,28 @@ def bot_control(bot, cars, dt):
     # pick the rival to deal with: nearest one around/ahead, grudges and the player first
     action = None
     target, best = None, None
-    for o in cars:
-        if o is bot:
-            continue
-        dx, dy = wrap_delta(bot.x, o.x), wrap_delta(bot.y, o.y)
-        fx, fy = dx * c + dy * s, -dx * s + dy * c
-        if fx < -50 or fx > 170 or abs(fy) > 90:
-            continue
-        score = abs(fx) + 1.5 * abs(fy)
-        if o.uid == bot.grudge:
-            score *= 0.4
-        if bot.hunts_player and not o.is_bot:
-            score *= 0.5
-        if best is None or score < best:
-            best, target, tfx, tfy = score, o, fx, fy
+    if BOT_AGGRESSION != "Chill":
+        for o in cars:
+            if o is bot:
+                continue
+            dx, dy = wrap_delta(bot.x, o.x), wrap_delta(bot.y, o.y)
+            fx, fy = dx * c + dy * s, -dx * s + dy * c
+            if fx < -50 or fx > 170 or abs(fy) > 90:
+                continue
+            score = abs(fx) + 1.5 * abs(fy)
+            if o.uid == bot.grudge:
+                score *= 0.4
+            if bot.hunts_player and not o.is_bot:
+                score *= 0.5
+            if best is None or score < best:
+                best, target, tfx, tfy = score, o, fx, fy
 
-    lane_goal = bot.lane_target
+    lane_goal = 0.0 if BOT_AGGRESSION == "Chill" else bot.lane_target
     if target is not None and bot.reverse_time <= 0:
         _, t_lat, _ = track_coords(target.x, target.y, idx)
         aggr = min(1.0, bot.aggression * (1.6 if target.uid == bot.grudge else 1.0))
+        if BOT_AGGRESSION == "Demolition":
+            aggr = 1.0
         if aggr > 0.45 and -30 < tfx < 110:
             lane_goal = t_lat                       # lean on them: drive into their lane
         elif 0 < tfx < 110 and abs(t_lat - lat) < 30:
@@ -3125,9 +3248,17 @@ class Camera:
         self.cos_c, self.sin_c = math.cos(rad), math.sin(rad)
 
     def update(self, dt, car):
-        # The car is always at the exact centre of the camera
-        self.x = car.x
-        self.y = car.y
+        # Dynamic look-ahead camera or centered camera
+        if DYNAMIC_LOOK_AHEAD and not car.dead:
+            target_lx = (car.vx / max(1.0, MAX_SPEED)) * 52.0
+            target_ly = (car.vy / max(1.0, MAX_SPEED)) * 52.0
+        else:
+            target_lx = 0.0
+            target_ly = 0.0
+        self.lead_x += (target_lx - self.lead_x) * min(1.0, dt * 3.5)
+        self.lead_y += (target_ly - self.lead_y) * min(1.0, dt * 3.5)
+        self.x = (car.x + self.lead_x) % WORLD
+        self.y = (car.y + self.lead_y) % WORLD
         speed = math.hypot(car.vx, car.vy)
 
         # Dynamic Speed & Boost Zoom (FOV dilation)
@@ -3883,7 +4014,14 @@ def _update_boxes(dt, cars):
             dx = wrap_delta(b["x"], car.x)
             dy = wrap_delta(b["y"], car.y)
             if dx * dx + dy * dy <= reach_sq:
-                kind = random.choice(POWERUP_KINDS)
+                if ITEM_RULE == "none":
+                    continue
+                elif ITEM_RULE == "kinetic":
+                    kind = random.choice(["boost", "bash"])
+                elif ITEM_RULE == "hazards":
+                    kind = random.choice(["cone", "oil"])
+                else:
+                    kind = random.choice(POWERUP_KINDS)
                 give_powerup(car, kind)
                 b["timer"] = BOX_RESPAWN
                 spawn_particles(b["x"], b["y"], 24, 140, BOX_COLORS.get("mystery", (45, 145, 255)), 0.65)
@@ -4318,7 +4456,7 @@ def draw_trails(screen, cars, cam):
             if (min(sx0, sx1) <= W + 20 and max(sx0, sx1) >= -20 and
                 min(sy0, sy1) <= H + 20 and max(sy0, sy1) >= -20):
                 f = life / TRAIL_LIFE
-                base_col = (40, 42, 24) if is_grass else SKID_ROAD_COLOR
+                base_col = SKID_GRASS_COLOR if is_grass else SKID_ROAD_COLOR
                 ground_col = GRASS_COLOR if is_grass else DIRT_COLOR
                 # In the last 35% of its 13s life, smoothly fade into the ground
                 if f < 0.35:
@@ -4680,9 +4818,9 @@ def draw_cones(screen, cam):
         ramps.draw(screen, cam, "cone", c["x"], c["y"], c["angle"])
 
 # ---- shaders and post-processing ----------------------------------------------------
-SHADER_PRESETS = ["OFF", "SOFT MIST", "RETRO CRT", "CINEMATIC", "FULL FX"]
+SHADER_PRESETS = ["NONE", "CRT", "CYBERPUNK", "NOIR", "CINEMATIC", "SUNSET"]
 FOG_OPTIONS = ["OFF", "LOW", "MEDIUM", "HIGH"]
-CRT_OPTIONS = ["OFF", "SUBTLE", "RETRO"]
+CRT_OPTIONS = ["OFF", "LOW", "MED", "HIGH"]
 VIGNETTE_OPTIONS = ["OFF", "ON"]
 SHADOWS_OPTIONS = ["OFF", "ON"]
 
@@ -4772,22 +4910,28 @@ def _rebuild_shader_surface():
     _SHADER_SURF = surf
 
 def apply_shader_preset(preset):
-    if preset == "OFF":
-        SHADER_SETTINGS["preset"] = "OFF"
+    if preset in ("NONE", "OFF"):
+        SHADER_SETTINGS["preset"] = "NONE"
         SHADER_SETTINGS["fog"] = "OFF"
         SHADER_SETTINGS["crt"] = "OFF"
         SHADER_SETTINGS["vignette"] = "OFF"
         SHADER_SETTINGS["shadows"] = "OFF"
-    elif preset == "SOFT MIST":
-        SHADER_SETTINGS["preset"] = "SOFT MIST"
-        SHADER_SETTINGS["fog"] = "MEDIUM"
-        SHADER_SETTINGS["crt"] = "OFF"
-        SHADER_SETTINGS["vignette"] = "OFF"
-        SHADER_SETTINGS["shadows"] = "ON"
-    elif preset == "RETRO CRT":
-        SHADER_SETTINGS["preset"] = "RETRO CRT"
+    elif preset in ("CRT", "RETRO CRT"):
+        SHADER_SETTINGS["preset"] = "CRT"
         SHADER_SETTINGS["fog"] = "OFF"
-        SHADER_SETTINGS["crt"] = "RETRO"
+        SHADER_SETTINGS["crt"] = "HIGH"
+        SHADER_SETTINGS["vignette"] = "ON"
+        SHADER_SETTINGS["shadows"] = "ON"
+    elif preset == "CYBERPUNK":
+        SHADER_SETTINGS["preset"] = "CYBERPUNK"
+        SHADER_SETTINGS["fog"] = "LOW"
+        SHADER_SETTINGS["crt"] = "LOW"
+        SHADER_SETTINGS["vignette"] = "ON"
+        SHADER_SETTINGS["shadows"] = "ON"
+    elif preset == "NOIR":
+        SHADER_SETTINGS["preset"] = "NOIR"
+        SHADER_SETTINGS["fog"] = "LOW"
+        SHADER_SETTINGS["crt"] = "OFF"
         SHADER_SETTINGS["vignette"] = "ON"
         SHADER_SETTINGS["shadows"] = "ON"
     elif preset == "CINEMATIC":
@@ -4796,10 +4940,10 @@ def apply_shader_preset(preset):
         SHADER_SETTINGS["crt"] = "OFF"
         SHADER_SETTINGS["vignette"] = "ON"
         SHADER_SETTINGS["shadows"] = "ON"
-    elif preset == "FULL FX":
-        SHADER_SETTINGS["preset"] = "FULL FX"
+    elif preset == "SUNSET":
+        SHADER_SETTINGS["preset"] = "SUNSET"
         SHADER_SETTINGS["fog"] = "MEDIUM"
-        SHADER_SETTINGS["crt"] = "SUBTLE"
+        SHADER_SETTINGS["crt"] = "OFF"
         SHADER_SETTINGS["vignette"] = "ON"
         SHADER_SETTINGS["shadows"] = "ON"
     _sync_fog_density_from_level()
@@ -4808,17 +4952,19 @@ def apply_shader_preset(preset):
 def update_shader_preset_label():
     for p in SHADER_PRESETS:
         test = {}
-        if p == "OFF":
+        if p == "NONE":
             test = {"fog": "OFF", "crt": "OFF", "vignette": "OFF", "shadows": "OFF"}
-        elif p == "SOFT MIST":
-            test = {"fog": "MEDIUM", "crt": "OFF", "vignette": "OFF", "shadows": "ON"}
-        elif p == "RETRO CRT":
-            test = {"fog": "OFF", "crt": "RETRO", "vignette": "ON", "shadows": "ON"}
+        elif p == "CRT":
+            test = {"fog": "OFF", "crt": "HIGH", "vignette": "ON", "shadows": "ON"}
+        elif p == "CYBERPUNK":
+            test = {"fog": "LOW", "crt": "LOW", "vignette": "ON", "shadows": "ON"}
+        elif p == "NOIR":
+            test = {"fog": "LOW", "crt": "OFF", "vignette": "ON", "shadows": "ON"}
         elif p == "CINEMATIC":
             test = {"fog": "MEDIUM", "crt": "OFF", "vignette": "ON", "shadows": "ON"}
-        elif p == "FULL FX":
-            test = {"fog": "MEDIUM", "crt": "SUBTLE", "vignette": "ON", "shadows": "ON"}
-        if all(SHADER_SETTINGS.get(k) == v for k, v in test.items()):
+        elif p == "SUNSET":
+            test = {"fog": "MEDIUM", "crt": "OFF", "vignette": "ON", "shadows": "ON"}
+        if test and all(SHADER_SETTINGS.get(k) == v for k, v in test.items()):
             SHADER_SETTINGS["preset"] = p
             return
     SHADER_SETTINGS["preset"] = "CUSTOM"

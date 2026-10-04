@@ -52,9 +52,52 @@ country flags).
 - **Team Race** — karts split into red/blue teams; the results screen tallies each team's
   finishing positions (lower total wins) and names the winning team.
 
-### Settings & profile
+### Settings & Profile (`~/.steer_profile.json`)
 
-Settings has a **master volume** slider, a **track type** selector (Meadow Dirt / Grand Prix Circuit), a **bot aggressiveness** selector (Chill / Normal / Aggressive / Brutal), a **lap count** toggle (3 / 5 / 7), a **HUD mode** toggle (Full / Immersive), and **key rebinding** (click an action, press a key). Your name, flag, volume, track type, bot aggressiveness, lap count, hud mode, keybinds, and stats (races, wins, best lap) are saved to `~/.steer_profile.json` and reloaded next launch.
+Settings are organized across four dedicated tabs with persistent profile storage:
+
+1. **🏁 RACE & GAMEPLAY:**
+   - **Track Selection:** Meadow Dirt, Grand Prix Circuit, Red Canyon, Frost Pass, Harvest Mud, Neon Night, Random.
+   - **Bot Aggression & Difficulty:** Chill, Casual, Feisty, Demolition.
+   - **Laps:** Slider (1 to 10 laps).
+   - **HUD Display Mode:** Classic (pinned), Immersive (fades until events/danger), Hidden (clean screen).
+   - **Steer Rate:** Slider (0.5x to 2.0x turning speed).
+   - **Steering Linearity / Curve:** Slider (1.0 Linear to 2.5 Exponential).
+   - **Inner Stick Deadzone:** Slider (0% to 25% drift cancellation).
+   - **Drift Assist:** Slider (0.0 to 1.0 counter-steer dampener).
+   - **Inverted Steer:** Toggle (ON / OFF).
+   - **Dynamic Look-Ahead Camera:** Toggle (offsets camera forward with speed).
+   - **Time Trial Ghost Opacity:** Slider (0% to 100% telemetry alpha).
+
+2. **🔊 SOUND:**
+   - **Master Volume:** Primary audio bus volume (0% to 100%).
+   - **Master Mute:** Toggle (hotkey `M`).
+   - **Music Volume:** Soundtrack playback gain (0% to 100%).
+   - **Engine Volume:** Real-time RPM audio level (0% to 100%).
+   - **Combat & World SFX Volume:** Impacts, bashes, pickups, and tire squeals (0% to 100%).
+   - **UI Audio Volume:** Countdown beeps, menu blips, and lap chimes (0% to 100%).
+
+3. **🖥️ VIDEO:**
+   - **Display Mode:** Exclusive Fullscreen, Borderless Windowed, Windowed.
+   - **Pixel-Perfect Scaling:** Toggle (constrains scaling to integer multipliers).
+   - **V-Sync & Frame Rate Cap:** 60 FPS, 120 FPS, 144 FPS, Unlimited, V-Sync On.
+   - **Camera Zoom:** 0.6x (close-up) to 1.6x (wide view).
+   - **Camera Shake:** 0.0 (disabled) to 2.0 (maximum trauma).
+   - **Fog Density:** 0.0 to 1.0 depth fog alpha.
+   - **Shader Presets:** NONE, CRT, CYBERPUNK, NOIR, CINEMATIC, SUNSET.
+   - **Scanlines:** OFF, LOW, MED, HIGH.
+   - **Vignette:** Toggle (ON / OFF).
+   - **Dynamic Drop Shadows:** Toggle (ON / OFF).
+   - **FPS Counter:** Toggle (live frame rate in top-left).
+
+4. **🎮 CONTROLS:**
+   - **Input Device Priority:** Auto-detects connected gamepads (Xbox, PlayStation, Nintendo Switch) vs Keyboard/Mouse.
+   - **Gamepad Presets:**
+     - *Arcade Classic:* Steer on Left Stick/D-pad, Gas on Face Button A/Cross, Drift on B/Circle.
+     - *Trigger Drive:* Gas on RT/R2, Brake on LT/L2, Drift on RB/R1, Bash on Stick Clicks (L3/R3).
+     - *Southpaw:* Swaps steering control to the Right Analog Stick.
+   - **Mouse Aim Mode:** Toggle (aim projectiles with cursor within 170° forward arc; Left-Click shoot, Right-Click drop hazard).
+   - **Full Keyboard Rebinding Matrix:** Steer Left, Steer Right, Accelerate/Ram, Brake/Reverse, Drift (Hold), Bash Left, Bash Right, Use Item/Shoot, Drop Hazard Behind.
 
 ### Vehicle & Sprite Stacking
 
@@ -67,10 +110,19 @@ holds the lobbies and forwards each player's car state; everyone runs the race l
 stays in sync.
 
 **Flow:** Play → Multiplayer → **Host** or **Join**.
-- **Host:** choose max players (2–12) and create a lobby. You get a **6-character code**;
-  the lobby is named after you. As the host, you can customize the **Match Settings** (Track Type, Bot Aggression, Laps, and AI Grid Fill) directly in the lobby panel.
+- **Host:** choose max players (2–12) and create a lobby. You get a **6-character code**; the lobby is named after you.
+- **Host Multiplayer Match Settings (Broadcast via Network):**
+  - **Track & Rotation Rule:** Host Choice, Player Vote, Random Circuit, 5-World Cup (runs Grand Prix Circuit, Red Canyon, Frost Pass, Harvest Mud, and Neon Night in sequential order).
+  - **Race Length (Laps):** 1, 3, 5, or 7 laps.
+  - **Collision / Contact Rules:** Full Contact, Solid (No Spun Damage), Ghost (Time Trial passing).
+  - **Bot Fill:** Fill to 8, Fill to 12, No Bots (Players Only).
+  - **Room Privacy:** Public (Lobby Browser), Friends Only, Invite Code Only (Private).
+  - **Slipstream Assist:** Toggle (ON / OFF catch-up drafting).
+  - **Item Distribution Rules:** Standard, High Explosives / Kinetic Only, Hazards Only (Cones & Oil), Pure Racing (No Items).
+  - **Spectator Mode:** Allowed / Disabled.
+  - **Player Moderation:** Instant **Kick** (`[K]`) and persistent name **Ban** (`[B]`).
 - **Join:** type a friend's 6-character code. Joiners see the host's synchronized match settings updated in real time.
-- In the **lobby** everyone sees the player list (name + flag + ready state) and the active match settings. Each player has a **Ready / Unready** button; the host can customize settings or **kick** anyone (the red `x`). When every player is ready (min 2), the race **starts automatically** with the host's custom settings on the same track for all.
+- In the **lobby** everyone sees the player list (name + flag + ready state) and the active match settings. When every player is ready (min 2), the race **starts automatically** with the host's custom settings on the same track for all.
 
 ### Running the server
 
@@ -139,6 +191,8 @@ Lobby, ready-up, kick, auto-start, match settings sync, and host migration are a
 
 - `main.py` — window, menus, input (keyboard + Xbox/PS/Nintendo controllers), game loop,
   multiplayer lobby UI, hot reload.
+- `ui.py` — the Steer UI kit: pixel-crisp menus, settings tabs, and the STEER logo drawn
+  entirely from flat palette colours (no fonts/images), plus the layout rects `main.py` hit-tests.
 - `sim.py` — everything else: track, scenery, physics, collisions, bots, camera, drawing,
   sound, car state (de)serialization for multiplayer. Edit + save it and the running
   single-player game picks the change up live (state carries over).
@@ -146,7 +200,7 @@ Lobby, ready-up, kick, auto-start, match settings sync, and host migration are a
 - `server.py` — the multiplayer lobby/relay server; optional Redis bus for multi-instance
   scaling (deploy to Render; see Multiplayer).
 - `Dockerfile`, `docker-compose.yml` — container + a local multi-replica cluster behind Redis.
-- `tests.py` — comprehensive headless `unittest` suite (39 tests: physics, net, timing, tilesets, game loop).
+- `tests.py` — comprehensive headless `unittest` suite (41 tests: physics, net, timing, tilesets, game loop).
 - `TASTE.md` — visual design notes, color palettes, and aesthetic guidelines for the retro pixel racing style.
 - `assets/car/` — `car_stack.png`, the 7-slice sprite stack for the player and bot racers.
 - `assets/decor/` — natural map scenery (`bush.png`, `tree.png`, `tree2.png`, `tree3.png`, `tree_log.png`, `tree3_log.png`).
@@ -156,9 +210,13 @@ Lobby, ready-up, kick, auto-start, match settings sync, and host migration are a
 - `assets/fx/` — particle and burst VFX sheets (`particle.png`, `Sprite-0001.png`, `Dust_01/02`, `Fire_01/02`, `DarkVFX2`).
 - `assets/props/` — 2.5D sprite-stacked obstacles (`cone_stack.png`, `barrel_stack.png`, `crate_stack.png`, `vase_stack.png`, `tire_stack_1..3.png`, `tree_*_stack.png`) and `ramps/ramp_wood_stack.png`.
 - `assets/sound/` — sound effects (`bash.mp3`, `death.mp3`, `powerup.mp3`, `powerup2.mp3`) and 7 music tracks in `sound/music/`.
-- `assets/tilesets/` — dual track environments:
+- `assets/tilesets/` — multi-track environments:
   - `meadow_dirt/` — classic dirt circuit with green grass infield/outfield and oil tracks.
   - `asphalt_circuit/` — championship asphalt circuit with curbing, dark tarmac, checktiles, and oil tracks.
+  - `canyon_sand/` — red-rock desert circuit with sun-baked sand road, canyon walls, and dust haze.
+  - `frost_pass/` — packed-snow road cut through deep snow with steel-grey snowbank edges, custom checktiles, and snow particles.
+  - `harvest_mud/` — autumn farmland course with churned-mud road, stubble fields, and muddy skid coloration.
+  - `neon_night/` — synthwave night circuit with glowing neon road edges and dark reflective tarmac.
 - `assets/track_tiles/` — dirt-on-grass road tiles, checkered finish line tiles (`checktile*.png`), and `oil_track.png`.
 - `assets/steer_palette.png` & `assets/steer_palette_1x.png` — color palette reference swatches.
 - `assets/UI/` — HUD icons (`gear`, `contrast`, `heart`, `logo`, etc.) and pixel font in `UI/m6x11/m6x11.ttf`.
@@ -581,6 +639,25 @@ suite kept green (`python3 -m unittest discover tests` → **10 tests, OK**).
   - Added `TASTE.md` design guide and color palette swatches `assets/steer_palette.png` and `assets/steer_palette_1x.png`.
 - **Comprehensive Verification:**
   - Ran headless test suite (`python3 tests.py` → **39 tests passed, OK** in 54.3s).
+
+---
+
+# Frost Pass Tileset & Steer UI Kit Redesign
+
+**When:** Sun Oct 4 2026
+**Summary:**
+- **Frost Pass Alpine Snow Circuit Integration:**
+  - Integrated complete `frost_pass` tileset into [`assets/tilesets/frost_pass/`](assets/tilesets/frost_pass): atlas (`frost_pass_sheet.png`, `frost_pass.json`, `frost_pass.tsx`), preview, `oil_track.png`, and 20 directional track/check tiles.
+  - Added snow/frozen asphalt physics properties: ice road skid marks (`#464a55`), snow surface skids (`#a5bece`), and dynamic snow wheel particle kickups.
+  - Paired high-tempo theme `05_pursuit.mp3` with Frost Pass, added to random circuit rotation and singleplayer / multiplayer track selector.
+  - Added comprehensive automated test coverage in `TestTilesets` within [`tests.py`](tests.py).
+- **Steer UI Kit (`ui.py`) & Menu Redesign:**
+  - Integrated standalone pixel-art UI kit [`ui.py`](ui.py) offering custom font rendering, STEER speed-streak logo, slab buttons with animated chequered tails, segmented sliders, toggles, and keycaps/gamepad glyphs.
+  - **Title & Pause Menus:** Redesigned layout with slanted dark ink band and red/white kerb border, kinetic slide-out slab buttons, live paused race status chip, and social icons (itch.io, youtube, instagram, discord).
+  - **Tabbed Settings:** Clean 4-tab interface (RACE, SOUND, VIDEO, CONTROLS) with row-by-row help descriptions, keyboard & controller mapping display, and unified multi-input support (keyboard, mouse, gamepad).
+  - **Button Integration:** Converted all menu and screen buttons to use authentic UI kit slabs while maintaining all existing game mechanics, mouse aim, banners, and multiplayer netcode.
+  - Verified full test suite passing (**41/41 tests, OK** in 61.5s).
+
 
 
 

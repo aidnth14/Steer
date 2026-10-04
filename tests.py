@@ -1033,5 +1033,35 @@ class TestRedisCluster(unittest.TestCase):
         asyncio.run(asyncio.wait_for(scenario(), timeout=15))
 
 
+class TestTilesets(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        pygame.init()
+        pygame.display.set_mode((sim.W, sim.H), pygame.NOFRAME)
+        sim.load_assets()
+
+    def test_all_tilesets_load_and_generate(self):
+        for ts in ["meadow_dirt", "asphalt_circuit", "frost_pass"]:
+            sim.set_tileset(ts)
+            self.assertEqual(sim.CURRENT_TILESET, ts)
+            self.assertIsNotNone(sim.TILES)
+            self.assertEqual(len(sim.TILES), 3)
+            self.assertEqual(len(sim.TILES[0]), 3)
+            self.assertTrue(all(sim.CHECK_TILES.get(k) is not None for k in ("center", "left", "right", "top", "bottom")))
+            sim.new_map(100, tileset=ts)
+            self.assertGreater(sim.ROAD_LEN, 1000)
+            self.assertIsNotNone(sim.GROUND_SURF)
+
+    def test_frost_pass_palette(self):
+        sim.set_tileset("frost_pass")
+        # Grass (deep snow) is high-key snow #f0f8ff (240, 248, 255)
+        self.assertGreater(sim.GRASS_COLOR[0], 230)
+        self.assertGreater(sim.GRASS_COLOR[1], 230)
+        self.assertGreater(sim.GRASS_COLOR[2], 230)
+        # Skid marks are grey / slate
+        self.assertEqual(sim.SKID_ROAD_COLOR, (70, 74, 85))
+        self.assertEqual(sim.SKID_GRASS_COLOR, (165, 190, 206))
+
+
 if __name__ == "__main__":
     unittest.main()

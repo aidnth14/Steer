@@ -12,6 +12,18 @@ from pygame._sdl2 import controller as sdlctrl
 import sim
 import net
 import buttonmanager
+import ui
+
+VERSION = "1.2.0"
+CREDIT = "made by @AidenShoroz · v" + VERSION
+# the icons in the menu's bottom-right corner: (icon, link). An icon only shows once its link is
+# filled in. Icons: "store" (bag), "video" (screen + play), "photo" (camera), "chat" (bubble).
+SOCIAL_LINKS = [
+    ("store", "https://aiden-shoroz.itch.io/"),
+    ("video", "https://www.youtube.com/@aidnth14"),
+    ("photo", "https://www.instagram.com/aidnth14/"),
+    ("chat", "https://discord.com/users/1125415771737182310"),
+]
 
 # gamepad: SDL's game-controller layer maps Xbox / PlayStation / Nintendo pads to one
 # standard layout (A = bottom face button, LB/RB = shoulders, etc.), so one mapping works
@@ -62,13 +74,22 @@ def ensure_local_server():
 
 # rebindable keyboard actions (defaults); stored per-user in the profile
 DEFAULT_KEYS = {
-    "left": pygame.K_a, "right": pygame.K_d, "bashL": pygame.K_q,
-    "bashR": pygame.K_e, "ram": pygame.K_SPACE, "drift": pygame.K_LSHIFT,
-    "shoot": pygame.K_f, "cone": pygame.K_c, "oil": pygame.K_v,
+    "left": pygame.K_a, "right": pygame.K_d, "ram": pygame.K_SPACE,
+    "brake": pygame.K_s, "drift": pygame.K_LSHIFT,
+    "bashL": pygame.K_q, "bashR": pygame.K_e, "shoot": pygame.K_f,
+    "cone": pygame.K_c, "oil": pygame.K_v, "drop_hazard": pygame.K_v,
 }
-KEY_ACTIONS = [("left", "Steer left"), ("right", "Steer right"), ("bashL", "Bash left"),
-               ("bashR", "Bash right"), ("ram", "Ram"), ("drift", "Drift"), ("shoot", "Shoot / Item"),
-               ("cone", "Throw Cone"), ("oil", "Spill Oil")]
+KEY_ACTIONS = [
+    ("left", "Steer Left"),
+    ("right", "Steer Right"),
+    ("ram", "Accelerate / Ram"),
+    ("brake", "Brake / Reverse"),
+    ("drift", "Drift (Hold)"),
+    ("bashL", "Bash Left"),
+    ("bashR", "Bash Right"),
+    ("shoot", "Use Item / Shoot"),
+    ("drop_hazard", "Drop Hazard Behind"),
+]
 
 GAME_MODES = [("race", "Race"), ("trial", "Time Trial"), ("elim", "Elimination"),
               ("battle", "Battle"), ("team", "Team Race")]
@@ -79,11 +100,18 @@ MENU_STATES = {"menu", "mode", "gamemode", "mp_menu",
 
 def load_profile():
     import json
-    d = {"name": "Player", "flag": "us", "races": 0, "wins": 0,
-         "best_lap": 0.0, "volume": 0.8, "laps": 3, "keys": {},
-         "shaders": dict(sim.SHADER_SETTINGS),
-         "bot_aggression": "Normal",
-         "track_type": "meadow_dirt"}
+    d = {
+        "name": "Player", "flag": "us", "races": 0, "wins": 0,
+        "best_lap": 0.0, "master_volume": 1.0, "sfx_volume": 0.8,
+        "music_volume": 0.6, "engine_volume": 0.8, "ui_volume": 0.8,
+        "laps": 3, "hud_mode": "Classic", "steer_rate": 1.0,
+        "steer_curve": 1.0, "stick_deadzone": 0.05, "drift_assist": 0.4,
+        "invert_steer": False, "look_ahead_cam": False, "ghost_opacity": 0.6,
+        "display_mode": "Windowed", "pixel_perfect": False, "fps_cap": "60 FPS",
+        "show_fps": False, "pad_preset": "Arcade Classic", "mouse_aim": True,
+        "keys": {}, "shaders": dict(sim.SHADER_SETTINGS),
+        "bot_aggression": "Casual", "track_type": "meadow_dirt"
+    }
     try:
         with open(PROFILE_PATH) as f:
             d.update(json.load(f))
@@ -98,14 +126,21 @@ def apply_profile_to_sim(d):
     # sim's defaults -- so they're pushed in here at startup AND again after every reload
     if isinstance(d.get("shaders"), dict):
         sim.set_shader_settings(d["shaders"])
+    sim.MASTER_VOLUME = float(d.get("master_volume", 1.0))
     sim.set_sfx_volume(d.get("sfx_volume", d.get("volume", 0.8)))
     sim.set_music_volume(d.get("music_volume", 0.6))
+    sim.ENGINE_VOLUME = float(d.get("engine_volume", 0.8))
+    sim.UI_VOLUME = float(d.get("ui_volume", 0.8))
+    sim.set_master_mute(bool(d.get("mute", False)))
+    sim.STEER_CURVE = float(d.get("steer_curve", 1.0))
+    sim.STICK_DEADZONE = float(d.get("stick_deadzone", 0.05))
+    sim.DYNAMIC_LOOK_AHEAD = bool(d.get("look_ahead_cam", False))
+    sim.GHOST_OPACITY = float(d.get("ghost_opacity", 0.6))
     sim.set_steer_rate(d.get("steer_rate", sim.steer_rate_frac()))
     sim.set_drift_assist(d.get("drift_assist", sim.drift_assist_frac()))
     sim.set_shake_intensity(d.get("shake", sim.shake_intensity_frac()))
     sim.set_zoom(d.get("zoom", sim.zoom_frac()))
     sim.INVERT_STEER = bool(d.get("invert_steer", False))
-    sim.set_master_mute(bool(d.get("mute", False)))
     if "fog_density" in d:
         sim.set_fog_density(d["fog_density"])
     if "bot_aggression" in d:
@@ -195,22 +230,13 @@ class Button:
         self.align = align
 
     def draw(self, screen, font, hover):
-        # no background: just the label with a dark outline so it reads over anything
-        col = UI_HIGHLIGHT if hover else (255, 255, 255)
-        base = font.render(self.label, True, col)
-        edge = font.render(self.label, True, (20, 20, 25))
+        # a ui-kit slab: dark when idle, racing red when highlighted (font is unused, kept for callers)
+        ui.slab(screen, self.rect, hover)
+        t = ui.text(self.label, 2, ui.WHITE if hover else ui.STEEL_L, bold=True)
         if self.align == "left":
-            text_x = self.rect.x + (22 if UI_POINTER else 2)
-            r = base.get_rect(midleft=(text_x, self.rect.centery))
-            ptr_pos = (self.rect.x, self.rect.centery - (UI_POINTER.get_height() // 2 if UI_POINTER else 0))
+            ui.put(screen, t, self.rect.x + 14, self.rect.centery - 1, "midleft")
         else:
-            r = base.get_rect(center=self.rect.center)
-            ptr_pos = (r.left - 20, self.rect.centery - (UI_POINTER.get_height() // 2 if UI_POINTER else 0))
-        for dx, dy in ((-2, 0), (2, 0), (0, -2), (0, 2), (-2, -2), (2, -2), (-2, 2), (2, 2)):
-            screen.blit(edge, (r.x + dx, r.y + dy))
-        screen.blit(base, r)
-        if hover and UI_POINTER:
-            screen.blit(UI_POINTER, ptr_pos)
+            ui.put(screen, t, self.rect.centerx, self.rect.centery - 1, "center")
 
     def clicked(self, pos):
         return self.rect.collidepoint(pos)
@@ -438,13 +464,37 @@ def main():
     ensure_local_server()
     net.prewarm()
     pygame.init()
-    screen = pygame.display.set_mode((sim.W, sim.H))
-    pygame.display.set_caption("Steer")
+    profile = load_profile()
+    display_mode = profile.get("display_mode", "Exclusive Fullscreen" if profile.get("fullscreen") else "Windowed")
+    pixel_perfect = bool(profile.get("pixel_perfect", False))
+    fps_cap_setting = profile.get("fps_cap", "60 FPS")
+    hud_mode = profile.get("hud_mode", "Classic" if profile.get("hud_mode") not in ("Classic", "Immersive", "Hidden") else profile["hud_mode"])
+    pad_preset = profile.get("gamepad_preset", "Arcade Classic")
+    mouse_aim = bool(profile.get("mouse_aim", False))
+    show_fps = bool(profile.get("show_fps", False))
 
-    def apply_display(fs):
-        # windowed = fixed 600x400; fullscreen = SCALED so the logical surface upscales cleanly
-        flags = (pygame.FULLSCREEN | pygame.SCALED) if fs else 0
-        return pygame.display.set_mode((sim.W, sim.H), flags)
+    def apply_display(mode=None, px_perf=None, vsync_opt=None):
+        nonlocal display_mode, pixel_perfect, fps_cap_setting
+        if mode is not None: display_mode = mode
+        if px_perf is not None: pixel_perfect = px_perf
+        if vsync_opt is not None: fps_cap_setting = vsync_opt
+
+        vsync_val = 1 if fps_cap_setting == "V-Sync On" else 0
+        flags = 0
+        if display_mode == "Exclusive Fullscreen":
+            flags = pygame.FULLSCREEN | (pygame.SCALED if pixel_perfect else 0)
+        elif display_mode == "Borderless Windowed":
+            flags = pygame.NOFRAME
+        else:
+            flags = pygame.RESIZABLE if pixel_perfect else 0
+
+        try:
+            return pygame.display.set_mode((sim.W, sim.H), flags, vsync=vsync_val)
+        except (TypeError, pygame.error):
+            return pygame.display.set_mode((sim.W, sim.H), flags)
+
+    screen = apply_display()
+    pygame.display.set_caption("Steer")
     clock = pygame.time.Clock()
     sim.load_assets()
     social_buttons = load_social_buttons()
@@ -473,32 +523,67 @@ def main():
         open_pad(i)
 
     def pad_steer():
-        # left stick X plus the d-pad, summed across all pads, with a deadzone
         s = 0.0
         for pad in pads.values():
             try:
-                s += pad.get_axis(PAD_STEER_AXIS) / 32768.0
-                s -= 1 if pad.get_button(PAD_LEFT) else 0
-                s += 1 if pad.get_button(PAD_RIGHT) else 0
+                axis = pygame.CONTROLLER_AXIS_RIGHTX if pad_preset == "Southpaw" else PAD_STEER_AXIS
+                s += pad.get_axis(axis) / 32768.0
+                if pad_preset != "Southpaw":
+                    s -= 1 if pad.get_button(PAD_LEFT) else 0
+                    s += 1 if pad.get_button(PAD_RIGHT) else 0
             except pygame.error:
                 pass
-        if abs(s) < PAD_DEADZONE:
+        deadzone = sim.STICK_DEADZONE
+        if abs(s) < deadzone:
             return 0.0
         return max(-1.0, min(1.0, s))
 
     def pad_drift():
         for pad in pads.values():
             try:
-                if pad.get_button(PAD_BACK):    # B / Circle held = drift
-                    return True
-                # RT / LT analog trigger pull (Xbox RT/LT, PS R2/L2, Nintendo ZR/ZL)
-                rt = pad.get_axis(pygame.CONTROLLER_AXIS_TRIGGERRIGHT) / 32767.0
-                lt = pad.get_axis(pygame.CONTROLLER_AXIS_TRIGGERLEFT) / 32767.0
-                if rt > 0.3 or lt > 0.3:
-                    return True
+                if pad_preset == "Trigger Drive":
+                    if pad.get_button(PAD_BASH_R):
+                        return True
+                else:
+                    if pad.get_button(PAD_BACK):    # B / Circle held = drift
+                        return True
+                    rt = pad.get_axis(pygame.CONTROLLER_AXIS_TRIGGERRIGHT) / 32767.0
+                    if rt > 0.3:
+                        return True
             except pygame.error:
                 pass
         return False
+
+    def pad_brake():
+        for pad in pads.values():
+            try:
+                if pad_preset == "Trigger Drive":
+                    lt = pad.get_axis(pygame.CONTROLLER_AXIS_TRIGGERLEFT) / 32767.0
+                    if lt > 0.3:
+                        return True
+                else:
+                    lt = pad.get_axis(pygame.CONTROLLER_AXIS_TRIGGERLEFT) / 32767.0
+                    if lt > 0.3 or pad.get_button(PAD_DOWN):
+                        return True
+            except pygame.error:
+                pass
+        return False
+
+    def get_input_device_name():
+        if pads:
+            try:
+                for p in pads.values():
+                    name = p.get_name().lower()
+                    if "xbox" in name or "x-box" in name:
+                        return "XBOX CONTROLLER"
+                    elif "playstation" in name or "dual" in name or "ps" in name:
+                        return "PLAYSTATION PAD"
+                    elif "switch" in name or "nintendo" in name or "joy-con" in name:
+                        return "NINTENDO SWITCH"
+                    return p.get_name()[:16].upper()
+            except Exception:
+                return "GAMEPAD DETECTED"
+        return "KEYBOARD & MOUSE"
 
     # Gyroscope / mobile device tilt detection for steering
     gyro_state = {
@@ -668,6 +753,79 @@ def main():
         else:
             screen.blit(sim.get_font(72).render("STEER", True, (255, 255, 255)), (18, 16))
 
+    _dim_more = pygame.Surface((sim.W, sim.H))     # settings sit on a darker backdrop
+    _dim_more.set_alpha(90)
+    _dim_more.fill((10, 12, 22))
+
+    def menu_extras():
+        # the bits of the title / pause menu that depend on the game: tag line, social icons
+        links = [k for k, url in SOCIAL_LINKS if url]
+        ex = {"credit": CREDIT, "socials": links, "pad": bool(pads)}
+        if player is not None and cars:
+            order = sorted(cars, key=lambda c: (c.dead, -c.progress))
+            pos = order.index(player) + 1 if player in order else 0
+            suf = "TH" if 10 <= pos % 100 <= 20 else {1: "ST", 2: "ND", 3: "RD"}.get(pos % 10, "TH")
+            lap = min(sim.TOTAL_LAPS, sim.lap_of(player) + 1)
+            ex.update(chip="PAUSED", tag=f"LAP {lap}/{sim.TOTAL_LAPS} · {pos}{suf} OF {len(cars)}")
+        else:
+            ex["tag"] = "DRIFT · BASH · WIN"
+        return ex
+
+    def results_buttons():
+        return ["MENU"] if race_was_online else ["RACE AGAIN", "MENU"]
+
+    def results_rows():
+        # the finish board's rows: order, flags, gap to the winner, best laps, fastest lap
+        if not final_order:
+            return []
+        lead = final_order[0]
+        laps = [c.best_lap for c in final_order if c.best_lap > 0]
+        fastest = min(laps) if laps else 0.0
+        rows = []
+        for c in final_order:
+            avg = c.progress / c.race_t if getattr(c, "race_t", 0) > 0 else 0.0
+            gap = (lead.progress - c.progress) / avg if avg > 1.0 else None
+            rows.append({"name": c.name, "flag": sim.get_flag(c.flag, 10) if c.flag else None,
+                         "gap": max(0.0, gap) if gap is not None else None, "best": c.best_lap,
+                         "laps_down": int((lead.progress - c.progress) // max(1.0, sim.ROAD_LEN)),
+                         "out": c.dead, "you": c is player,
+                         "fastest": fastest > 0 and c.best_lap == fastest})
+        return rows
+
+    def results_text():
+        mode_name = dict(GAME_MODES).get(game_mode, "Race").upper()
+        sub = f"{mode_name} · {sim.TOTAL_LAPS} LAPS" if game_mode not in ("battle", "elim") else mode_name
+        rows = results_rows()
+        me = next((i for i, r in enumerate(rows) if r["you"]), None)
+        if team_result:
+            foot = team_result.split("   ")[0]
+        elif me is None:
+            foot = None
+        elif me == 0:
+            foot = "YOU WON!"
+        else:
+            p = me + 1
+            suf = "TH" if 10 <= p % 100 <= 20 else {1: "ST", 2: "ND", 3: "RD"}.get(p % 10, "TH")
+            g = rows[me]["gap"]
+            foot = f"YOU FINISHED {p}{suf} OF {len(rows)}"
+            if rows[me]["laps_down"] >= 1 and not rows[me]["out"]:
+                n = rows[me]["laps_down"]
+                foot += f" · {n} LAP{'S' if n > 1 else ''} DOWN"
+            elif g is not None and not rows[me]["out"] and game_mode not in ("battle", "elim"):
+                foot += f" · +{g:.2f}S BEHIND {rows[0]['name'].upper()}"
+        return sub, foot, rows
+
+    def results_choose(i):
+        nonlocal player, state
+        btns = results_buttons()
+        idx = min(max(0, i), len(btns) - 1)
+        label = btns[idx]
+        if label == "RACE AGAIN":
+            start_game()
+        else:
+            player = None
+            state = "menu"
+
     def draw_connect_overlay():
         # full-screen takeover while we're mid-connect, so a slow/cold-starting server reads
         # as "loading" rather than a frozen or broken menu
@@ -708,6 +866,9 @@ def main():
 
     state = "menu"
     menu_sel = mode_sel = gamemode_sel = 0  # highlighted menu row for controller / keyboard nav
+    results_sel = 0             # results screen: 0 = Race Again, 1 = Menu
+    results_t = 0.0             # seconds the results board has been up (rows slide in)
+    race_was_online = False     # the last race was multiplayer (no Race Again on its results)
     current_seed = sim.ROAD_SEED
     player_name = profile.get("name", "Player")
     _pf = profile.get("flag", "us")
@@ -773,53 +934,146 @@ def main():
     confirm_join_btn = Button((sim.W / 2 - 100, 256, 200, 42), "Join")
     ready_btn = Button((sim.W / 2 - 150, 290, 140, 36), "Ready")
     leave_btn = Button((sim.W / 2 + 10, 290, 140, 36), "Leave")
-    host_aggr_btn = Button((336, 116, 228, 28), "")
-    host_laps_btn = Button((336, 150, 228, 28), "")
-    host_bots_btn = Button((336, 184, 228, 28), "")
-    host_track_btn = Button((336, 218, 228, 28), "")
-    lobby_settings = {"bot_aggression": "Normal", "laps": 3, "bot_count": "fill", "track": profile.get("track_type", "meadow_dirt")}
-    # general-tab sliders (left column): each a 0..1 value with a getter/setter + profile key
+    host_track_btn = Button((316, 96, 264, 22), "")
+    host_rot_btn   = Button((316, 120, 264, 22), "")
+    host_laps_btn  = Button((316, 144, 264, 22), "")
+    host_bots_btn  = Button((316, 168, 264, 22), "")
+    host_aggr_btn  = Button((316, 192, 264, 22), "")
+    host_coll_btn  = Button((316, 216, 264, 22), "")
+    host_slip_btn  = Button((316, 240, 264, 22), "")
+    host_items_btn = Button((316, 264, 264, 22), "")
+    host_priv_btn  = Button((316, 288, 264, 22), "")
+    lobby_settings = {
+        "track": profile.get("track_type", "meadow_dirt"),
+        "rotation": "Host Choice",
+        "laps": 3,
+        "bot_count": "Fill to 8",
+        "bot_aggression": "Casual",
+        "collision": "Full Contact",
+        "slipstream": "ON",
+        "items": "Standard",
+        "privacy": "Public",
+        "spectate": "Allowed",
+    }
+    # general-tab sliders: each a 0..1 value with a getter/setter + profile key
     SL_X, SL_W, SL_H = 24, 150, 8
     sliders = [
-        {"label": "SFX",         "get": lambda: sim.SFX_VOLUME,   "set": sim.set_sfx_volume,    "key": "sfx_volume"},
-        {"label": "Music",       "get": lambda: sim.MUSIC_VOLUME, "set": sim.set_music_volume,  "key": "music_volume"},
-        {"label": "Fog",         "get": lambda: sim.FOG_DENSITY,  "set": sim.set_fog_density,   "key": "fog_density"},
-        {"label": "Steering",    "get": sim.steer_rate_frac,      "set": sim.set_steer_rate,    "key": "steer_rate"},
-        {"label": "Camera Zoom", "get": sim.zoom_frac,            "set": sim.set_zoom,          "key": "zoom"},
-        {"label": "Drift Assist","get": sim.drift_assist_frac,    "set": sim.set_drift_assist,  "key": "drift_assist"},
-        {"label": "Shake",       "get": sim.shake_intensity_frac, "set": sim.set_shake_intensity,"key": "shake"},
+        {"label": "Master Vol",   "get": lambda: sim.MASTER_VOLUME, "set": sim.set_master_volume, "key": "master_volume",  "val_label": lambda: f"{int(round(sim.MASTER_VOLUME * 100))}%"},
+        {"label": "Music Vol",    "get": lambda: sim.MUSIC_VOLUME,  "set": sim.set_music_volume,  "key": "music_volume",   "val_label": lambda: f"{int(round(sim.MUSIC_VOLUME * 100))}%"},
+        {"label": "Engine Vol",   "get": lambda: sim.ENGINE_VOLUME, "set": sim.set_engine_volume, "key": "engine_volume",  "val_label": lambda: f"{int(round(sim.ENGINE_VOLUME * 100))}%"},
+        {"label": "SFX Vol",      "get": lambda: sim.SFX_VOLUME,    "set": sim.set_sfx_volume,    "key": "sfx_volume",     "val_label": lambda: f"{int(round(sim.SFX_VOLUME * 100))}%"},
+        {"label": "UI Audio",     "get": lambda: sim.UI_VOLUME,     "set": sim.set_ui_volume,     "key": "ui_volume",      "val_label": lambda: f"{int(round(sim.UI_VOLUME * 100))}%"},
+        {"label": "Laps",         "get": lambda: (sim.TOTAL_LAPS - 1) / 9.0, "set": lambda v: setattr(sim, "TOTAL_LAPS", max(1, min(10, int(round(1.0 + v * 9.0))))), "key": "laps", "val_label": lambda: str(sim.TOTAL_LAPS)},
+        {"label": "Steer Rate",   "get": sim.steer_rate_frac,       "set": sim.set_steer_rate,    "key": "steer_rate",     "val_label": lambda: f"{round(0.5 + sim.steer_rate_frac() * 1.5, 2):.1f}x"},
+        {"label": "Steer Curve",  "get": lambda: (sim.STEER_CURVE - 1.0) / 1.5, "set": lambda v: setattr(sim, "STEER_CURVE", round(1.0 + v * 1.5, 2)), "key": "steer_curve", "val_label": lambda: f"{sim.STEER_CURVE:.1f}"},
+        {"label": "Deadzone",     "get": lambda: sim.STICK_DEADZONE / 0.25, "set": lambda v: setattr(sim, "STICK_DEADZONE", round(v * 0.25, 3)), "key": "stick_deadzone", "val_label": lambda: f"{int(round(sim.STICK_DEADZONE * 100))}%"},
+        {"label": "Drift Assist", "get": sim.drift_assist_frac,     "set": sim.set_drift_assist,  "key": "drift_assist",   "val_label": lambda: f"{round(sim.drift_assist_frac(), 2):.1f}"},
+        {"label": "Ghost Opacity","get": lambda: sim.GHOST_OPACITY, "set": lambda v: setattr(sim, "GHOST_OPACITY", round(v, 2)), "key": "ghost_opacity", "val_label": lambda: f"{int(round(sim.GHOST_OPACITY * 100))}%"},
+        {"label": "Camera Zoom",  "get": sim.zoom_frac,             "set": sim.set_zoom,          "key": "zoom",           "val_label": lambda: f"{round(0.6 + sim.zoom_frac() * 1.0, 2):.1f}x"},
+        {"label": "Camera Shake", "get": sim.shake_intensity_frac,  "set": sim.set_shake_intensity,"key": "shake",          "val_label": lambda: f"{round(sim.shake_intensity_frac() * 2.0, 2):.1f}x"},
+        {"label": "Fog Density",  "get": lambda: sim.FOG_DENSITY,   "set": sim.set_fog_density,   "key": "fog_density",    "val_label": lambda: f"{int(round(sim.FOG_DENSITY * 100))}%"},
     ]
     for i, s in enumerate(sliders):
-        s["track"] = pygame.Rect(SL_X, 74 + i * 30, SL_W, SL_H)
+        s["track"] = pygame.Rect(SL_X, 74 + i * 30, SL_W, SL_H)   # moved to the row's spot when drawn
     active_slider = None        # the slider dict currently being dragged, or None
-    # general-tab toggles (middle column)
-    TGL_X = 210
-    inv_btn = Button((TGL_X, 64, 170, 25), "")
-    mute_btn = Button((TGL_X, 95, 170, 25), "")
-    fs_btn = Button((TGL_X, 126, 170, 25), "")
-    fps_btn = Button((TGL_X, 157, 170, 25), "")
-    aggr_btn = Button((TGL_X, 188, 170, 25), "")
-    laps_btn = Button((TGL_X, 219, 170, 25), "")
-    hud_btn = Button((TGL_X, 250, 170, 25), "")
-    track_btn = Button((TGL_X, 281, 170, 25), "")
+    slider_by_key = {s["key"]: s for s in sliders}
 
-    settings_tab = "general"
-    shader_sel = 0
-    tab_gen_btn = Button((sim.W / 2 - 160, 22, 150, 32), "GENERAL")
-    tab_shd_btn = Button((sim.W / 2 + 10, 22, 150, 32), "SHADERS")
-    shd_quick_btn = Button((sim.W / 2 + 10, 134, 150, 30), f"{sim.SHADER_SETTINGS['preset']} >")
-    shd_row_btns = [
-        Button((sim.W / 2 + 10, 74 + i * 38, 165, 32), "") for i in range(5)
-    ]
-    settings_back_btn = Button((sim.W // 2 - 80, 344, 160, 34), "Back")
+    # ---- settings: four tabs of rows, all driven the same way by mouse, keys and pad -------
+    SET_TABS = ["RACE", "SOUND", "VIDEO", "CONTROLS"]
+    set_tab = 0                 # active tab index
+    set_sel = 0                 # highlighted row in that tab
+    set_mouse = None            # last mouse position seen on the settings screen (hover = select)
+
+    def _cycle(opts, cur, delta):
+        i = opts.index(cur) if cur in opts else 0
+        return opts[(i + delta) % len(opts)]
+
+    def _save_shaders():
+        profile["shaders"] = dict(sim.SHADER_SETTINGS)
+        profile["fog_density"] = round(sim.FOG_DENSITY, 3)
+        save_profile(profile)
+
+    def ch_track(d):
+        topts = list(sim.TILESETS) + ["random"]
+        cur = sim.get_track_type()
+        nxt = _cycle(topts, cur, d)
+        sim.set_track_type(nxt)
+        profile["track_type"] = nxt
+        save_profile(profile)
+
+    def ch_bots(d):
+        nxt = _cycle(sim.BOT_AGGRESSION_LEVELS, sim.get_bot_aggression(), d)
+        sim.set_bot_aggression(nxt)
+        profile["bot_aggression"] = nxt
+        save_profile(profile)
+
+    def ch_hud(d):
+        nonlocal hud_mode
+        hud_mode = _cycle(["Classic", "Immersive", "Hidden"], hud_mode, d)
+        profile["hud_mode"] = hud_mode
+        save_profile(profile)
+
+    def ch_invert(d):
+        sim.INVERT_STEER = not sim.INVERT_STEER
+        profile["invert_steer"] = sim.INVERT_STEER
+        save_profile(profile)
+
+    def ch_lookahead(d):
+        sim.DYNAMIC_LOOK_AHEAD = not sim.DYNAMIC_LOOK_AHEAD
+        profile["look_ahead_cam"] = sim.DYNAMIC_LOOK_AHEAD
+        save_profile(profile)
+
+    def ch_mute(d):
+        sim.set_master_mute(not sim.MASTER_MUTE)
+        profile["mute"] = sim.MASTER_MUTE
+        save_profile(profile)
+
+    def ch_display_mode(d):
+        nonlocal screen
+        modes = ["Windowed", "Borderless Windowed", "Exclusive Fullscreen"]
+        apply_display(mode=_cycle(modes, display_mode, d))
+        profile["display_mode"] = display_mode
+        profile["fullscreen"] = (display_mode == "Exclusive Fullscreen")
+        save_profile(profile)
+
+    def ch_pixel_perfect(d):
+        nonlocal screen
+        apply_display(px_perf=not pixel_perfect)
+        profile["pixel_perfect"] = pixel_perfect
+        save_profile(profile)
+
+    def ch_fps_cap(d):
+        nonlocal screen
+        fps_opts = ["60 FPS", "120 FPS", "144 FPS", "Unlimited", "V-Sync On"]
+        apply_display(vsync_opt=_cycle(fps_opts, fps_cap_setting, d))
+        profile["fps_cap"] = fps_cap_setting
+        save_profile(profile)
+
+    def ch_fps(d):
+        nonlocal show_fps
+        show_fps = not show_fps
+        profile["show_fps"] = show_fps
+        save_profile(profile)
+
+    def ch_pad_preset(d):
+        nonlocal pad_preset
+        pad_preset = _cycle(["Arcade Classic", "Trigger Drive", "Southpaw"], pad_preset, d)
+        profile["gamepad_preset"] = pad_preset
+        save_profile(profile)
+
+    def ch_mouse_aim(d):
+        nonlocal mouse_aim
+        mouse_aim = not mouse_aim
+        profile["mouse_aim"] = mouse_aim
+        save_profile(profile)
 
     SHADER_DESCRIPTIONS = {
-        "CINEMATIC": "Atmospheric mist + soft vignette corners",
-        "SOFT MIST": "Gentle cool track fog layer",
-        "RETRO CRT": "90s arcade scanlines + curved vignette",
-        "FULL FX": "Combined fog + subtle scanlines + vignette",
-        "OFF": "Clean raw pixels, no post-processing",
-        "CUSTOM": "Customized shader parameters",
+        "NONE": "Clean raw pixels without shaders",
+        "CRT": "Arcade monitor scanlines + phosphor curvature",
+        "CYBERPUNK": "Vibrant neon blues and bloom flares",
+        "NOIR": "High-contrast monochrome with red color isolation",
+        "CINEMATIC": "Atmospheric mist and soft vignette corners",
+        "SUNSET": "Golden warm haze and sunset gradient",
     }
 
     def cycle_shader_option(idx, delta):
@@ -849,48 +1103,140 @@ def main():
             i = opts.index(cur) if cur in opts else 0
             sim.set_shader_option("shadows", opts[(i + delta) % len(opts)])
 
-    settings_sel = 0
+    def ch_shader(idx):
+        def f(d):
+            cycle_shader_option(idx, d)
+            _save_shaders()
+        return f
 
-    def apply_setting_toggle(idx, d=1):
-        nonlocal fullscreen, show_fps, hud_mode, screen
-        if idx == 0:    # invert steer
-            sim.INVERT_STEER = not sim.INVERT_STEER
-            profile["invert_steer"] = sim.INVERT_STEER
-        elif idx == 1:  # mute
-            sim.set_master_mute(not sim.MASTER_MUTE)
-            profile["mute"] = sim.MASTER_MUTE
-        elif idx == 2:  # fullscreen
-            fullscreen = not fullscreen
-            screen = apply_display(fullscreen)
-            profile["fullscreen"] = fullscreen
-        elif idx == 3:  # fps
-            show_fps = not show_fps
-            profile["show_fps"] = show_fps
-        elif idx == 4:  # bots
-            levels = sim.BOT_AGGRESSION_LEVELS
-            cur = sim.get_bot_aggression()
-            i = levels.index(cur) if cur in levels else 1
-            nxt = levels[(i + d) % len(levels)]
-            sim.set_bot_aggression(nxt)
-            profile["bot_aggression"] = nxt
-        elif idx == 5:  # laps
-            lopts = [3, 5, 7]
-            cur = sim.TOTAL_LAPS
-            i = lopts.index(cur) if cur in lopts else 0
-            sim.TOTAL_LAPS = lopts[(i + d) % len(lopts)]
-            profile["laps"] = sim.TOTAL_LAPS
-        elif idx == 6:  # hud mode
-            hud_mode = "IMMERSIVE" if hud_mode == "FULL" else "FULL"
-            profile["hud_mode"] = hud_mode
-        elif idx == 7:  # track type
-            topts = ["meadow_dirt", "asphalt_circuit", "random"]
-            cur = sim.get_track_type()
-            i = topts.index(cur) if cur in topts else 0
-            nxt = topts[(i + d) % len(topts)]
-            sim.set_track_type(nxt)
-            profile["track_type"] = nxt
-        save_profile(profile)
-        sim.play_ui("ui_click")
+    def ch_onoff(key):
+        def f(d):
+            sim.set_shader_option(key, "OFF" if sim.SHADER_SETTINGS.get(key, "ON") == "ON" else "ON")
+            _save_shaders()
+        return f
+
+    def SL(key, help_):
+        return {"kind": "slider", "slider": slider_by_key[key], "label": slider_by_key[key]["label"], "help": help_}
+
+    def settings_rows(tab):
+        """The rows of one settings tab: kind, label, help, the live value, and how to change it."""
+        name = SET_TABS[tab]
+        if name == "RACE":
+            rows = [
+                {"kind": "cycle", "label": "Track", "get": lambda: sim.get_tileset_title(), "change": ch_track,
+                 "help": "Which circuit the next race runs on."},
+                {"kind": "cycle", "label": "Bots", "get": sim.get_bot_aggression, "change": ch_bots,
+                 "help": "Chill follows waypoints; Demolition actively rams and bashes."},
+                SL("laps", "Laps per race (1 to 10)."),
+                {"kind": "cycle", "label": "HUD Mode", "get": lambda: hud_mode, "change": ch_hud,
+                 "help": "Classic pins UI; Immersive reveals on changes; Hidden hides all."},
+                SL("steer_rate", "Angular turning rate (0.5x to 2.0x)."),
+                SL("steer_curve", "Input curve (1.0 Linear to 2.5 Exponential)."),
+                SL("stick_deadzone", "Clamps joystick drift below threshold (0% to 25%)."),
+                SL("drift_assist", "Counter-steer yaw dampener during handbrake slides."),
+                {"kind": "toggle", "label": "Invert Steer", "get": lambda: sim.INVERT_STEER,
+                 "change": ch_invert, "help": "Swaps left and right steering direction."},
+                {"kind": "toggle", "label": "Look-Ahead Cam", "get": lambda: sim.DYNAMIC_LOOK_AHEAD,
+                 "change": ch_lookahead, "help": "Offsets camera forward along velocity vector at speed."},
+                SL("ghost_opacity", "Transparency of personal-best ghost in Time Trial."),
+            ]
+        elif name == "SOUND":
+            rows = [
+                SL("master_volume", "Primary audio bus output volume."),
+                {"kind": "toggle", "label": "Master Mute", "get": lambda: sim.MASTER_MUTE,
+                 "change": ch_mute, "help": "Silences all audio immediately. Hotkey: M."},
+                SL("music_volume", "Playback volume for chiptune racing soundtrack."),
+                SL("engine_volume", "Real-time pitch-shifted kart RPM loop volume."),
+                SL("sfx_volume", "Impacts, bashes, pickups, tire squeals, and crashes."),
+                SL("ui_volume", "Countdown horns, menu blips, and lap chimes."),
+            ]
+        elif name == "VIDEO":
+            rows = [
+                {"kind": "cycle", "label": "Display Mode", "get": lambda: display_mode, "change": ch_display_mode,
+                 "help": "Windowed, Borderless Windowed, or Exclusive Fullscreen."},
+                {"kind": "toggle", "label": "Pixel-Perfect", "get": lambda: pixel_perfect, "change": ch_pixel_perfect,
+                 "help": "Constrains scaling to integer multipliers for razor-sharp pixels."},
+                {"kind": "cycle", "label": "FPS Cap", "get": lambda: fps_cap_setting, "change": ch_fps_cap,
+                 "help": "Match refresh rate or lock frames (60, 120, 144, Unlimited, V-Sync)."},
+                SL("zoom", "Camera FOV and height above the track (0.6x to 1.6x)."),
+                SL("shake", "Amplitude of camera shake trauma from impacts and boosts."),
+                SL("fog_density", "Depth fog density across the circuit."),
+                {"kind": "cycle", "label": "Look", "get": lambda: sim.SHADER_SETTINGS.get("preset", "CINEMATIC"),
+                 "change": ch_shader(0),
+                 "help": SHADER_DESCRIPTIONS.get(sim.SHADER_SETTINGS.get("preset", ""), "Post-processing shader style.")},
+                {"kind": "cycle", "label": "Scanlines", "get": lambda: sim.SHADER_SETTINGS.get("crt", "OFF"),
+                 "change": ch_shader(2), "help": "CRT scanlines opacity (OFF, LOW, MED, HIGH)."},
+                {"kind": "toggle", "label": "Vignette", "get": lambda: sim.SHADER_SETTINGS.get("vignette") == "ON",
+                 "change": ch_onoff("vignette"), "help": "Darkens screen corners for cinematic focus."},
+                {"kind": "toggle", "label": "Shadows", "get": lambda: sim.SHADER_SETTINGS.get("shadows") == "ON",
+                 "change": ch_onoff("shadows"), "help": "Directional dynamic drop shadows under karts and props."},
+                {"kind": "toggle", "label": "FPS Counter", "get": lambda: show_fps,
+                 "change": ch_fps, "help": "Displays live frame rate in top-left corner."},
+            ]
+        else: # CONTROLS
+            rows = [
+                {"kind": "cycle", "label": "Pad Preset", "get": lambda: pad_preset, "change": ch_pad_preset,
+                 "help": "Arcade Classic, Trigger Drive, or Southpaw preset."},
+                {"kind": "toggle", "label": "Mouse Aim", "get": lambda: mouse_aim, "change": ch_mouse_aim,
+                 "help": "Aim items with cursor within 170° arc (L-Click fire, R-Click hazard)."},
+            ] + [{"kind": "bind", "id": ak, "label": albl, "help": "Press Enter or Click to rebind key."}
+                 for ak, albl in KEY_ACTIONS]
+        for i, r in enumerate(rows):
+            if r["kind"] == "slider":
+                r["slider"]["track"] = ui.slider_track(i, len(rows))
+                r["get"] = r["slider"]["get"]
+                if "val_label" in r["slider"]:
+                    r["val_label"] = r["slider"]["val_label"]
+        return rows
+
+    def settings_view(rows):
+        out = []
+        for r in rows:
+            if r["kind"] == "bind":
+                v = ui.key_label(pygame.key.name(keybinds[r["id"]]))
+                vl = None
+            else:
+                v = r["get"]()
+                vl = r.get("val_label")() if "val_label" in r and callable(r["val_label"]) else None
+            out.append({"kind": r["kind"], "label": r["label"], "value": v, "help": r["help"],
+                        "id": r.get("id"), "val_label": vl})
+        return out
+
+    def settings_change(row, d, sound=True):
+        if row["kind"] == "slider":
+            sl = row["slider"]
+            sl["set"](max(0.0, min(1.0, round((sl["get"]() + 0.05 * d) * 20) / 20)))
+            if sl["key"] == "laps":
+                profile["laps"] = sim.TOTAL_LAPS
+            elif sl["key"] == "steer_curve":
+                profile["steer_curve"] = sim.STEER_CURVE
+            elif sl["key"] == "stick_deadzone":
+                profile["stick_deadzone"] = sim.STICK_DEADZONE
+            elif sl["key"] == "ghost_opacity":
+                profile["ghost_opacity"] = sim.GHOST_OPACITY
+            else:
+                profile[sl["key"]] = round(sl["get"](), 3)
+            if sl["key"] == "fog_density":
+                profile["shaders"] = dict(sim.SHADER_SETTINGS)
+            save_profile(profile)
+        elif row["kind"] in ("cycle", "toggle"):
+            row["change"](d)
+        if sound and row["kind"] != "bind":
+            sim.play_ui("ui_move" if row["kind"] == "slider" else "ui_click")
+
+    def settings_activate(row):
+        # Enter / A / a click on the row (the caller's click blip covers the sound)
+        nonlocal awaiting_key
+        if row["kind"] == "bind":
+            awaiting_key = row["id"]
+        elif row["kind"] != "slider":
+            settings_change(row, 1, sound=False)
+
+    def settings_tab_to(t, sound=True):
+        nonlocal set_tab, set_sel, awaiting_key
+        t %= len(SET_TABS)
+        if t != set_tab:
+            set_tab, set_sel, awaiting_key = t, 0, None     # the selection tick plays the blip
 
     cars, player, cam = [], None, None
     attract_cars, attract_cam = [], None    # live bots racing behind the menu
@@ -912,9 +1258,10 @@ def main():
         nonlocal elim_timer, ghost_rec, last_ranks, trial_lap, ghost_best, ghost_time, popup
         nonlocal letterbox_h, target_letterbox_h, slowmo_timer, slowmo_active, finish_pending
         nonlocal final_lap_announced, reported_dead, hud_alpha, hud_reveal_timer
-        nonlocal prev_player_hearts, prev_player_rank, prev_player_lap
+        nonlocal prev_player_hearts, prev_player_rank, prev_player_lap, race_was_online
         sim.NET_ROLE = "off"
         online = False
+        race_was_online = False
         bot_count = 0 if game_mode == "trial" else random.randint(5, 7)
         current_seed = random.randint(0, 1_000_000)
         sim.set_bot_aggression(profile.get("bot_aggression", "Normal"))
@@ -1046,7 +1393,8 @@ def main():
         nonlocal current_seed, state, online, bcast_t, countdown, go_timer, end_title, mp_players, mp_bots
         nonlocal letterbox_h, target_letterbox_h, slowmo_timer, slowmo_active, finish_pending
         nonlocal final_lap_announced, reported_dead, hud_alpha, hud_reveal_timer
-        nonlocal prev_player_hearts, prev_player_rank, prev_player_lap
+        nonlocal prev_player_hearts, prev_player_rank, prev_player_lap, race_was_online
+        race_was_online = True
         mp_players = start_msg["players"]
         current_seed = start_msg["seed"]
         st = start_msg.get("settings") or (lobby.get("settings") if lobby else {}) or {}
@@ -1133,7 +1481,14 @@ def main():
     last_sel = None             # (state, selections) last frame, for the menu tick sound
     stick_nav_timer = 0.0
     while running:
-        dt = min(clock.tick(60) / 1000.0, 1 / 30)   # clamp so a freeze/stall can't teleport the car
+        fps_target = 60
+        if fps_cap_setting == "120 FPS":
+            fps_target = 120
+        elif fps_cap_setting == "144 FPS":
+            fps_target = 144
+        elif fps_cap_setting == "Unlimited":
+            fps_target = 0
+        dt = min(clock.tick(fps_target) / 1000.0, 1 / 30)   # clamp so a freeze/stall can't teleport the car
         mouse_pos = pygame.mouse.get_pos()
         sim.SFX_MUTED = state != "playing"   # menus + attract-mode race run silent
         frame_state = state                  # to hear pause / resume once events are handled
@@ -1231,17 +1586,14 @@ def main():
         else:
             items.append(("play", "Play"))
         items += [("settings", "Settings"), ("quit", "Quit")]
-        bh = 32
-        y0 = sim.H - 18 - bh * len(items)
-        menu_buttons = [(nm, Button((18, y0 + i * bh, 200, bh), lbl, align="left"))
-                        for i, (nm, lbl) in enumerate(items)]
+        menu_buttons = [(nm, Button(r, lbl, align="left"))
+                        for (nm, lbl), r in zip(items, ui.menu_layout(len(items), sim.H))]
         menu_sel = max(0, min(menu_sel, len(menu_buttons) - 1))
 
         # mode screen (Singleplayer / Multiplayer / Back), same bottom-left stack
         mode_items = [("single", "Singleplayer"), ("multi", "Multiplayer"), ("back", "Back")]
-        mode_y0 = sim.H - 18 - bh * len(mode_items)
-        mode_buttons = [(nm, Button((18, mode_y0 + i * bh, 220, bh), lbl, align="left"))
-                        for i, (nm, lbl) in enumerate(mode_items)]
+        mode_buttons = [(nm, Button(r, lbl, align="left"))
+                        for (nm, lbl), r in zip(mode_items, ui.menu_layout(len(mode_items), sim.H))]
         mode_sel = max(0, min(mode_sel, len(mode_buttons) - 1))
 
         gamemode_buttons = []
@@ -1257,7 +1609,8 @@ def main():
                 if btn.clicked(mouse_pos):
                     menu_sel = i
                     break
-            if any(sb["rect"].collidepoint(mouse_pos) for sb in social_buttons):
+            links = [(k, url) for k, url in SOCIAL_LINKS if url]
+            if any(r.collidepoint(mouse_pos) for r in ui.social_layout(len(links), sim.W, sim.H)):
                 if not cursor_hand:
                     try:
                         pygame.mouse.set_cursor(pygame.SYSTEM_CURSOR_HAND)
@@ -1288,9 +1641,20 @@ def main():
                     break
             if back_btn.clicked(mouse_pos):
                 gamemode_sel = len(gamemode_buttons)
+        elif state == "results":
+            for i, r in enumerate(ui.results_buttons(results_buttons())):
+                if r.collidepoint(mouse_pos):
+                    results_sel = i
+        elif state == "settings":
+            if mouse_pos != set_mouse:      # only a moving mouse steals the highlight from the keys
+                if set_mouse is not None and awaiting_key is None:
+                    hit = ui.hit_row(mouse_pos, len(settings_rows(set_tab)), SET_TABS[set_tab] == "CONTROLS")
+                    if hit is not None:
+                        set_sel = hit
+                set_mouse = mouse_pos
 
         # menu sounds: a tick whenever the highlighted button changes (mouse or keys)
-        cur_sel = (state, menu_sel, mode_sel, gamemode_sel, settings_sel)
+        cur_sel = (state, menu_sel, mode_sel, gamemode_sel, set_tab, set_sel, results_sel)
         if state in MENU_STATES and last_sel is not None and last_sel[0] == state and cur_sel != last_sel:
             sim.play_ui("ui_move")
         last_sel = cur_sel
@@ -1428,37 +1792,36 @@ def main():
                     elif event.unicode and event.unicode.isprintable() and len(player_name) < 12:
                         player_name += event.unicode
                 elif state == "settings":
-                    if event.key == pygame.K_TAB:
-                        settings_tab = "shaders" if settings_tab == "general" else "general"
-                    elif event.key == pygame.K_ESCAPE:
+                    rows = settings_rows(set_tab)
+                    if event.key == pygame.K_ESCAPE:
                         save_profile(profile)
                         state = "menu"
-                    elif settings_tab == "shaders":
-                        if event.key in (pygame.K_DOWN, pygame.K_s):
-                            shader_sel = (shader_sel + 1) % 6
-                        elif event.key in (pygame.K_UP, pygame.K_w):
-                            shader_sel = (shader_sel - 1) % 6
-                        elif event.key in (pygame.K_LEFT, pygame.K_a):
-                            if shader_sel < 5:
-                                cycle_shader_option(shader_sel, -1)
-                                profile["shaders"] = dict(sim.SHADER_SETTINGS)
-                                save_profile(profile)
-                        elif event.key in (pygame.K_RIGHT, pygame.K_d):
-                            if shader_sel < 5:
-                                cycle_shader_option(shader_sel, 1)
-                                profile["shaders"] = dict(sim.SHADER_SETTINGS)
-                                save_profile(profile)
-                        elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
-                            if shader_sel == 5:
-                                save_profile(profile)
-                                state = "menu"
-                            else:
-                                cycle_shader_option(shader_sel, 1)
-                                profile["shaders"] = dict(sim.SHADER_SETTINGS)
-                                save_profile(profile)
-                elif event.key == pygame.K_ESCAPE and state == "results":
-                    player = None
-                    state = "menu"
+                    elif event.key in (pygame.K_TAB, pygame.K_e, pygame.K_PAGEDOWN):
+                        back = event.key == pygame.K_TAB and (event.mod & pygame.KMOD_SHIFT)
+                        settings_tab_to(set_tab + (-1 if back else 1))
+                    elif event.key in (pygame.K_q, pygame.K_PAGEUP):
+                        settings_tab_to(set_tab - 1)
+                    elif event.key in (pygame.K_DOWN, pygame.K_s):
+                        set_sel = (set_sel + 1) % len(rows)
+                    elif event.key in (pygame.K_UP, pygame.K_w):
+                        set_sel = (set_sel - 1) % len(rows)
+                    elif event.key in (pygame.K_LEFT, pygame.K_a):
+                        settings_change(rows[set_sel], -1)
+                    elif event.key in (pygame.K_RIGHT, pygame.K_d):
+                        settings_change(rows[set_sel], 1)
+                    elif event.key in (pygame.K_RETURN, pygame.K_KP_ENTER, pygame.K_SPACE):
+                        settings_activate(rows[set_sel])
+                elif state == "results":
+                    nb = len(results_buttons())
+                    if event.key == pygame.K_ESCAPE:
+                        player = None
+                        state = "menu"
+                    elif event.key in (pygame.K_LEFT, pygame.K_a, pygame.K_UP, pygame.K_w):
+                        results_sel = (results_sel - 1) % nb
+                    elif event.key in (pygame.K_RIGHT, pygame.K_d, pygame.K_DOWN, pygame.K_s):
+                        results_sel = (results_sel + 1) % nb
+                    elif event.key in (pygame.K_RETURN, pygame.K_KP_ENTER, pygame.K_SPACE):
+                        results_choose(min(results_sel, nb - 1))
                 elif event.key == pygame.K_ESCAPE and state == "lobby":
                     net_disconnect()
                     state = "mp_menu"
@@ -1494,12 +1857,14 @@ def main():
                         sim.play_ui("ui_click")
                     if state == "menu":
                         opened_social = False
-                        for sb in social_buttons:
-                            if sb["rect"].collidepoint(mouse_pos):
+                        links = [(k, url) for k, url in SOCIAL_LINKS if url]
+                        opened_social = False
+                        for (k, url), r in zip(links, ui.social_layout(len(links), sim.W, sim.H)):
+                            if r.collidepoint(mouse_pos):
                                 try:
-                                    webbrowser.open(sb["url"])
+                                    webbrowser.open(url)
                                 except Exception as e:
-                                    print("failed to open social link:", e)
+                                    print("could not open", url, e)
                                 opened_social = True
                                 break
                         if opened_social:
@@ -1571,101 +1936,106 @@ def main():
                         net_disconnect()
                         state = "mp_menu"
                     elif lobby and lobby.get("host") == lobby.get("self"):
-                        if host_aggr_btn.clicked(mouse_pos):
-                            levels = sim.BOT_AGGRESSION_LEVELS
-                            cur = lobby_settings.get("bot_aggression", "Normal")
-                            idx = levels.index(cur) if cur in levels else 1
-                            lobby_settings["bot_aggression"] = levels[(idx + 1) % len(levels)]
-                            if netc is not None:
-                                netc.send({"t": "settings", "settings": lobby_settings})
+                        if host_track_btn.clicked(mouse_pos):
+                            topts = list(sim.TILESETS) + ["random"]
+                            cur = lobby_settings.get("track", "meadow_dirt")
+                            idx = topts.index(cur) if cur in topts else 0
+                            lobby_settings["track"] = topts[(idx + 1) % len(topts)]
+                        elif host_rot_btn.clicked(mouse_pos):
+                            ropts = ["Host Choice", "Player Vote", "Random Circuit", "5-World Cup"]
+                            cur = lobby_settings.get("rotation", "Host Choice")
+                            idx = ropts.index(cur) if cur in ropts else 0
+                            lobby_settings["rotation"] = ropts[(idx + 1) % len(ropts)]
                         elif host_laps_btn.clicked(mouse_pos):
                             lopts = [1, 3, 5, 7]
                             cur = int(lobby_settings.get("laps", 3))
                             idx = lopts.index(cur) if cur in lopts else 1
                             lobby_settings["laps"] = lopts[(idx + 1) % len(lopts)]
-                            if netc is not None:
-                                netc.send({"t": "settings", "settings": lobby_settings})
                         elif host_bots_btn.clicked(mouse_pos):
-                            bopts = ["fill", "4", "2", "none"]
-                            cur = str(lobby_settings.get("bot_count", "fill")).lower()
+                            bopts = ["Fill to 8", "Fill to 12", "No Bots"]
+                            cur = lobby_settings.get("bot_count", "Fill to 8")
                             idx = bopts.index(cur) if cur in bopts else 0
                             lobby_settings["bot_count"] = bopts[(idx + 1) % len(bopts)]
-                            if netc is not None:
-                                netc.send({"t": "settings", "settings": lobby_settings})
-                        elif host_track_btn.clicked(mouse_pos):
-                            topts = ["meadow_dirt", "asphalt_circuit"]
-                            cur = lobby_settings.get("track", "meadow_dirt")
-                            idx = topts.index(cur) if cur in topts else 0
-                            lobby_settings["track"] = topts[(idx + 1) % len(topts)]
-                            if netc is not None:
-                                netc.send({"t": "settings", "settings": lobby_settings})
+                        elif host_aggr_btn.clicked(mouse_pos):
+                            levels = ["Chill", "Casual", "Feisty", "Demolition"]
+                            cur = lobby_settings.get("bot_aggression", "Casual")
+                            idx = levels.index(cur) if cur in levels else 1
+                            lobby_settings["bot_aggression"] = levels[(idx + 1) % len(levels)]
+                        elif host_coll_btn.clicked(mouse_pos):
+                            copts = ["Full Contact", "Solid (No Spun Damage)", "Ghost (Time Trial)"]
+                            cur = lobby_settings.get("collision", "Full Contact")
+                            idx = copts.index(cur) if cur in copts else 0
+                            lobby_settings["collision"] = copts[(idx + 1) % len(copts)]
+                        elif host_slip_btn.clicked(mouse_pos):
+                            lobby_settings["slipstream"] = "OFF" if lobby_settings.get("slipstream", "ON") == "ON" else "ON"
+                        elif host_items_btn.clicked(mouse_pos):
+                            iopts = ["Standard", "High Explosives / Kinetic Only", "Hazards Only", "Pure Racing (No Items)"]
+                            cur = lobby_settings.get("items", "Standard")
+                            idx = iopts.index(cur) if cur in iopts else 0
+                            lobby_settings["items"] = iopts[(idx + 1) % len(iopts)]
+                        elif host_priv_btn.clicked(mouse_pos):
+                            popts = ["Public", "Friends Only", "Invite Code Only"]
+                            cur = lobby_settings.get("privacy", "Public")
+                            idx = popts.index(cur) if cur in popts else 0
+                            lobby_settings["privacy"] = popts[(idx + 1) % len(popts)]
                         else:
                             for i, p in enumerate(lobby.get("players", [])):
                                 if p["id"] == lobby.get("self"):
                                     continue
-                                kr = pygame.Rect(265, 88 + i * 28, 20, 20)
+                                kr = pygame.Rect(256, 88 + i * 28, 20, 20)
+                                br = pygame.Rect(280, 88 + i * 28, 20, 20)
                                 if kr.collidepoint(mouse_pos):
                                     netc.send({"t": "kick", "id": p["id"]})
                                     break
+                                if br.collidepoint(mouse_pos):
+                                    netc.send({"t": "ban", "id": p["id"]})
+                                    break
+                        if netc is not None:
+                            netc.send({"t": "settings", "settings": lobby_settings})
                 elif state == "settings":
-                    if settings_back_btn.clicked(mouse_pos) or back_btn.clicked(mouse_pos):
+                    rows = settings_rows(set_tab)
+                    is_keys = SET_TABS[set_tab] == "CONTROLS"
+                    hit = ui.hit_row(mouse_pos, len(rows), is_keys)
+                    tab_hit = next((i for i, r in enumerate(ui.tab_layout(SET_TABS))
+                                    if r.collidepoint(mouse_pos)), None)
+                    if ui.BACK.collidepoint(mouse_pos):
                         save_profile(profile)
                         state = "menu"
-                    elif inv_btn.clicked(mouse_pos):
-                        sim.INVERT_STEER = not sim.INVERT_STEER
-                        profile["invert_steer"] = sim.INVERT_STEER
-                        save_profile(profile)
-                    elif mute_btn.clicked(mouse_pos):
-                        sim.set_master_mute(not sim.MASTER_MUTE)
-                        profile["mute"] = sim.MASTER_MUTE
-                        save_profile(profile)
-                    elif fs_btn.clicked(mouse_pos):
-                        fullscreen = not fullscreen
-                        screen = apply_display(fullscreen)
-                        profile["fullscreen"] = fullscreen
-                        save_profile(profile)
-                    elif fps_btn.clicked(mouse_pos):
-                        show_fps = not show_fps
-                        profile["show_fps"] = show_fps
-                        save_profile(profile)
-                    elif aggr_btn.clicked(mouse_pos):
-                        levels = sim.BOT_AGGRESSION_LEVELS
-                        cur = sim.get_bot_aggression()
-                        idx = levels.index(cur) if cur in levels else 1
-                        nxt = levels[(idx + 1) % len(levels)]
-                        sim.set_bot_aggression(nxt)
-                        profile["bot_aggression"] = nxt
-                        save_profile(profile)
-                    elif laps_btn.clicked(mouse_pos):
-                        lopts = [3, 5, 7]
-                        cur = sim.TOTAL_LAPS
-                        idx = lopts.index(cur) if cur in lopts else 0
-                        sim.TOTAL_LAPS = lopts[(idx + 1) % len(lopts)]
-                        profile["laps"] = sim.TOTAL_LAPS
-                        save_profile(profile)
-                    elif hud_btn.clicked(mouse_pos):
-                        hud_mode = "IMMERSIVE" if hud_mode == "FULL" else "FULL"
-                        profile["hud_mode"] = hud_mode
-                        save_profile(profile)
-                    elif track_btn.clicked(mouse_pos):
-                        apply_setting_toggle(7, 1)
-                    elif any(s["track"].inflate(12, 12).collidepoint(mouse_pos) for s in sliders):
-                        active_slider = next(s for s in sliders
-                                             if s["track"].inflate(12, 12).collidepoint(mouse_pos))
-                    else:
-                        for i, (ak, _) in enumerate(KEY_ACTIONS):
-                            rr = pygame.Rect(400, 78 + i * 25, sim.W - 416, 24)
-                            if rr.collidepoint(mouse_pos):
-                                awaiting_key = ak
-                                break
+                    elif tab_hit is not None:
+                        settings_tab_to(tab_hit, sound=False)
+                    elif hit is not None:
+                        set_sel = hit
+                        row = rows[hit]
+                        if row["kind"] == "slider":
+                            if row["slider"]["track"].inflate(24, 16).collidepoint(mouse_pos):
+                                active_slider = row["slider"]
+                                tr = active_slider["track"]
+                                v = max(0.0, min(1.0, (mouse_pos[0] - tr.x) / tr.w))
+                                active_slider["set"](v)
+                                settings_change(row, 0, sound=True)
+                        elif row["kind"] == "cycle":
+                            c = ui.ctrl_rect(hit, len(rows), is_keys)
+                            settings_change(row, -1 if (c.collidepoint(mouse_pos)
+                                                        and mouse_pos[0] < c.centerx) else 1, sound=False)
+                        else:
+                            settings_activate(row)
                 elif state == "results":
-                    if back_btn.clicked(mouse_pos):
-                        player = None
-                        back_btn.rect = pygame.Rect(sim.W / 2 - 100, 306, 200, 44)
-                        state = "menu"
+                    for i, r in enumerate(ui.results_buttons(results_buttons())):
+                        if r.collidepoint(mouse_pos):
+                            results_choose(i)
+                            break
             elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
                 if active_slider is not None:
-                    profile[active_slider["key"]] = round(active_slider["get"](), 3)
+                    if active_slider["key"] == "laps":
+                        profile["laps"] = sim.TOTAL_LAPS
+                    elif active_slider["key"] == "steer_curve":
+                        profile["steer_curve"] = sim.STEER_CURVE
+                    elif active_slider["key"] == "stick_deadzone":
+                        profile["stick_deadzone"] = sim.STICK_DEADZONE
+                    elif active_slider["key"] == "ghost_opacity":
+                        profile["ghost_opacity"] = sim.GHOST_OPACITY
+                    else:
+                        profile[active_slider["key"]] = round(active_slider["get"](), 3)
                     active_slider = None
                     save_profile(profile)
             elif event.type == pygame.CONTROLLERDEVICEADDED:
@@ -1820,61 +2190,36 @@ def main():
                                 netc.send({"t": "settings", "settings": lobby_settings})
                             sim.play_ui("ui_click")
                 elif state == "settings":
-                    if b in (PAD_BASH_L, PAD_BASH_R):
-                        if settings_sel < 7:
-                            settings_sel += 7
-                        elif settings_sel < 15:
-                            settings_sel -= 7
-                        sim.play_ui("ui_move")
-                    elif b == PAD_DOWN:
-                        settings_sel = (settings_sel + 1) % 16
-                    elif b == PAD_UP:
-                        settings_sel = (settings_sel - 1) % 16
-                    elif b == PAD_LEFT:
-                        if settings_sel < 7:
-                            s = sliders[settings_sel]
-                            s["set"](max(0.0, s["get"]() - 0.05))
-                            profile[s["key"]] = round(s["get"](), 3)
-                            save_profile(profile)
-                            sim.play_ui("ui_move")
-                        elif 7 <= settings_sel < 15:
-                            apply_setting_toggle(settings_sel - 7, -1)
-                    elif b == PAD_RIGHT:
-                        if settings_sel < 7:
-                            s = sliders[settings_sel]
-                            s["set"](min(1.0, s["get"]() + 0.05))
-                            profile[s["key"]] = round(s["get"](), 3)
-                            save_profile(profile)
-                            sim.play_ui("ui_move")
-                        elif 7 <= settings_sel < 15:
-                            apply_setting_toggle(settings_sel - 7, 1)
-                    elif b == PAD_CONFIRM:
-                        if settings_sel < 7:
-                            sim.play_ui("ui_click")
-                        elif 7 <= settings_sel < 15:
-                            apply_setting_toggle(settings_sel - 7, 1)
-                        elif settings_sel == 15:
-                            save_profile(profile)
-                            state = "menu"
-                    elif b == PAD_BACK:
+                    rows = settings_rows(set_tab)
+                    if b == PAD_BACK:
+                        awaiting_key = None
                         save_profile(profile)
                         state = "menu"
+                    elif b == PAD_BASH_L:
+                        settings_tab_to(set_tab - 1)
+                    elif b == PAD_BASH_R:
+                        settings_tab_to(set_tab + 1)
+                    elif b == PAD_DOWN:
+                        set_sel = (set_sel + 1) % len(rows)
+                    elif b == PAD_UP:
+                        set_sel = (set_sel - 1) % len(rows)
+                    elif b == PAD_LEFT:
+                        settings_change(rows[set_sel], -1)
+                    elif b == PAD_RIGHT:
+                        settings_change(rows[set_sel], 1)
+                    elif b == PAD_CONFIRM:
+                        settings_activate(rows[set_sel])
                 elif state == "results":
-                    if b == PAD_CONFIRM:
-                        if not online:
-                            start_game()
-                        else:
-                            player = None
-                            back_btn.rect = pygame.Rect(sim.W / 2 - 100, 306, 200, 44)
-                            state = "menu"
-                    elif b == PAD_ITEM:
-                        if not online:
-                            sim.new_map(random.randint(0, 1_000_000))
-                            start_game()
-                    elif b == PAD_BACK:
+                    nb = len(results_buttons())
+                    if b == PAD_BACK:
                         player = None
-                        back_btn.rect = pygame.Rect(sim.W / 2 - 100, 306, 200, 44)
                         state = "menu"
+                    elif b in (PAD_LEFT, PAD_UP):
+                        results_sel = (results_sel - 1) % nb
+                    elif b in (PAD_RIGHT, PAD_DOWN):
+                        results_sel = (results_sel + 1) % nb
+                    elif b == PAD_CONFIRM:
+                        results_choose(min(results_sel, nb - 1))
 
         # Analog left-stick menu navigation
         if stick_nav_timer > 0.0:
@@ -1991,14 +2336,20 @@ def main():
 
                 keys = pygame.key.get_pressed()
                 steer = 0.0
-                if keys[pygame.K_LEFT] or keys[keybinds["left"]]:
+                if keys[pygame.K_LEFT] or keys[keybinds.get("left", pygame.K_a)]:
                     steer -= 1
-                if keys[pygame.K_RIGHT] or keys[keybinds["right"]]:
+                if keys[pygame.K_RIGHT] or keys[keybinds.get("right", pygame.K_d)]:
                     steer += 1
                 steer = max(-1.0, min(1.0, steer + pad_steer() + gyro_steer()))
                 if sim.INVERT_STEER:
                     steer = -steer
-                drift = keys[keybinds["drift"]] or pad_drift()
+                steer = sim.apply_steer_controls(steer)
+                drift = keys[keybinds.get("drift", pygame.K_LSHIFT)] or pad_drift()
+                brake = keys[keybinds.get("brake", pygame.K_s)] or pad_brake()
+                if keys[keybinds.get("drop_hazard", pygame.K_v)] and action is None:
+                    last_sab = getattr(player, "_last_sab", "oil")
+                    action = "drop_cone" if last_sab == "oil" else "oil"
+                    player._last_sab = "cone" if last_sab == "oil" else "oil"
 
                 spectating = online and player.dead
                 dt_sim = dt * 0.25 if slowmo_active else dt
@@ -2018,7 +2369,7 @@ def main():
                     state = "results"
 
                 if spectating:
-                    steer, action, drift = 0.0, None, False
+                    steer, action, drift, brake = 0.0, None, False, False
 
                 if online:
                     # I drive my car; bots are mine too if I'm host; every other car is a
@@ -2026,11 +2377,11 @@ def main():
                     controls = []
                     for c in cars:
                         if c is player:
-                            controls.append((steer, action, drift))
+                            controls.append((steer, action, drift, brake))
                         elif not c.is_remote:           # host-owned bot
                             controls.append(sim.bot_control(c, cars, dt_sim))
                         else:
-                            controls.append((0, None))
+                            controls.append((0, None, False, False))
                     sim.step(dt_sim, cars, controls)
                     lerp = min(1.0, 10.0 * dt_sim)
                     for slot, c in enumerate(cars):
@@ -2058,7 +2409,7 @@ def main():
                             netc.send({"t": "finished", "order": order})
                             apply_finished(order)
                 else:
-                    pc = (steer, action, drift)
+                    pc = (steer, action, drift, brake)
                     controls = [pc if c is player else sim.bot_control(c, cars, dt_sim) for c in cars]
                     sim.step(dt_sim, cars, controls)
 
@@ -2136,15 +2487,19 @@ def main():
                                         near_danger = True
                                         break
 
-                    if near_danger or countdown > 0 or slowmo_active or spectating:
-                        hud_target_alpha = 1.0
-                    elif hud_reveal_timer > 0.0:
-                        hud_reveal_timer -= dt
-                        hud_target_alpha = 1.0
-                    else:
-                        hud_target_alpha = 0.0
-
-                    hud_alpha += (hud_target_alpha - hud_alpha) * min(1.0, dt * 5.0)
+                    if hud_mode == "Hidden":
+                        hud_alpha = 0.0
+                    elif hud_mode == "Classic":
+                        hud_alpha = 1.0
+                    else: # Immersive
+                        if near_danger or countdown > 0 or slowmo_active or spectating:
+                            hud_target_alpha = 1.0
+                        elif hud_reveal_timer > 0.0:
+                            hud_reveal_timer -= dt
+                            hud_target_alpha = 1.0
+                        else:
+                            hud_target_alpha = 0.0
+                        hud_alpha += (hud_target_alpha - hud_alpha) * min(1.0, dt * 5.0)
 
                 # camera follows the leader while spectating, else your own car
                 cam_target = player
@@ -2159,7 +2514,8 @@ def main():
                     gi = min(len(ghost_best) - 1, len(ghost_rec))
                     gx, gy, ga = ghost_best[gi]
                     sim.draw_ghost(screen, cam, gx, gy, ga)
-                sim.draw_hud(screen, player, font_small, cars, hud_opacity=hud_alpha)
+                if hud_alpha > 0.01:
+                    sim.draw_hud(screen, player, font_small, cars, hud_opacity=hud_alpha)
                 go_timer = max(0.0, go_timer - dt)
                 if go_timer > 0:
                     go = font_big.render("GO!", True, (120, 255, 120))
@@ -2239,47 +2595,7 @@ def main():
 
         elif state == "menu":
             draw_bg()
-            draw_logo()
-            for i, (_, btn) in enumerate(menu_buttons):
-                btn.draw(screen, font_btn, btn.clicked(mouse_pos) or i == menu_sel)
-            credit_txt = "made by @AidenShoroz v.1.2.0"
-            cred_edge = font_credits.render(credit_txt, True, (20, 20, 25))
-            cred_base = font_credits.render(credit_txt, True, (255, 255, 255))
-            cr = cred_base.get_rect(bottomright=(sim.W - 14, sim.H - 12))
-
-            # Social buttons: itch.io, youtube, instagram, discord before the credit
-            gap = 10
-            btn_w = 21
-            total_btn_w = len(social_buttons) * btn_w + max(0, len(social_buttons) - 1) * gap
-            start_x = cr.left - 18 - total_btn_w
-
-            hovered_tip = None
-            hovered_btn_rect = None
-            try:
-                mouse_down = pygame.mouse.get_pressed()[0]
-            except Exception:
-                mouse_down = False
-
-            for i, sb in enumerate(social_buttons):
-                sb["rect"].topleft = (start_x + i * (btn_w + gap), cr.centery - (btn_w // 2))
-                is_hover = sb["rect"].collidepoint(mouse_pos)
-                if is_hover:
-                    hovered_tip = sb["tooltip"]
-                    hovered_btn_rect = sb["rect"]
-                spr = sb["pressed"] if (is_hover and mouse_down) else (sb["hover"] if is_hover else sb["idle"])
-                screen.blit(spr, sb["rect"].topleft)
-
-            if hovered_tip and hovered_btn_rect:
-                tip_edge = font_credits.render(hovered_tip, True, (20, 20, 25))
-                tip_base = font_credits.render(hovered_tip, True, (255, 235, 120))
-                tr = tip_base.get_rect(midbottom=(hovered_btn_rect.centerx, hovered_btn_rect.top - 4))
-                for dx, dy in ((-1, 0), (1, 0), (0, -1), (0, 1)):
-                    screen.blit(tip_edge, (tr.x + dx, tr.y + dy))
-                screen.blit(tip_base, tr)
-
-            for dx, dy in ((-1, 0), (1, 0), (0, -1), (0, 1), (1, 1)):
-                screen.blit(cred_edge, (cr.x + dx, cr.y + dy))
-            screen.blit(cred_base, cr)
+            ui.draw_menu(screen, [b_.label for _, b_ in menu_buttons], menu_sel, mouse_pos, **menu_extras())
 
         elif state == "name_entry":
             draw_bg()
@@ -2364,114 +2680,44 @@ def main():
 
         elif state == "settings":
             draw_bg()
-            title = font_big.render("SETTINGS", True, (255, 255, 255))
-            screen.blit(title, title.get_rect(center=(sim.W / 2, 40)))
-            # left column: sliders (SFX / Music / Fog / Steering)
-            if active_slider is not None:
-                v = (mouse_pos[0] - active_slider["track"].x) / active_slider["track"].w
-                active_slider["set"](max(0.0, min(1.0, v)))
-            for i, s in enumerate(sliders):
-                tr = s["track"]
-                screen.blit(font_small.render(s["label"], True, (220, 230, 210)),
-                            (tr.x, tr.y - 16))
-                pygame.draw.rect(screen, (40, 55, 40), tr, border_radius=4)
-                frac = max(0.0, min(1.0, s["get"]()))
-                fillw = int(tr.w * frac)
-                pygame.draw.rect(screen, UI_ACCENT, (tr.x, tr.y, fillw, tr.h), border_radius=4)
-                pygame.draw.circle(screen, (255, 255, 255), (tr.x + fillw, tr.centery), 7)
-                pygame.draw.circle(screen, (30, 30, 35), (tr.x + fillw, tr.centery), 7, 1)
-                if pads and settings_sel == i:
-                    pygame.draw.rect(screen, (255, 230, 70), tr.inflate(12, 10), 2, border_radius=6)
-            # middle column: toggles (ON/OFF buttons)
-            inv_btn.label = f"Inverted Steer: {'ON' if sim.INVERT_STEER else 'OFF'}"
-            mute_btn.label = f"Master Mute: {'ON' if sim.MASTER_MUTE else 'OFF'}"
-            fs_btn.label = f"Fullscreen: {'ON' if fullscreen else 'OFF'}"
-            fps_btn.label = f"FPS Counter: {'ON' if show_fps else 'OFF'}"
-            aggr_btn.label = f"Bots: {sim.get_bot_aggression()} >"
-            laps_btn.label = f"Laps: {sim.TOTAL_LAPS} >"
-            hud_btn.label = f"HUD: {hud_mode}"
-            track_btn.label = f"Track: {sim.get_tileset_title()} >"
-            tgl_list = [(inv_btn, sim.INVERT_STEER, 7), (mute_btn, sim.MASTER_MUTE, 8),
-                        (fs_btn, fullscreen, 9), (fps_btn, show_fps, 10),
-                        (aggr_btn, False, 11), (laps_btn, False, 12),
-                        (hud_btn, hud_mode == "IMMERSIVE", 13),
-                        (track_btn, False, 14)]
-            for btn, on, s_idx in tgl_list:
-                is_sel = (pads and settings_sel == s_idx)
-                btn.draw(screen, font_small, btn.clicked(mouse_pos) or on or is_sel)
-                if is_sel:
-                    pygame.draw.rect(screen, (255, 230, 70), btn.rect.inflate(6, 6), 2, border_radius=4)
-            # right column: controls (click a row, then press a key)
-            cx = 400
-            screen.blit(font_small.render("Controls (click, then a key):", True,
-                                          (200, 220, 200)), (cx, 56))
-            for i, (ak, albl) in enumerate(KEY_ACTIONS):
-                y = 78 + i * 25
-                binding = "press a key..." if awaiting_key == ak else pygame.key.name(keybinds[ak])
-                col = UI_ACCENT if awaiting_key == ak else (230, 230, 230)
-                screen.blit(font_small.render(albl, True, (210, 220, 210)), (cx, y))
-                if awaiting_key == ak:
-                    b = font_small.render(binding, True, col)
-                    screen.blit(b, b.get_rect(midright=(sim.W - 16, y + 11)))
-                else:
-                    k_icon = buttonmanager.get_key_icon(keybinds[ak], size=21)
-                    if k_icon:
-                        screen.blit(k_icon, k_icon.get_rect(midright=(sim.W - 20, y + 11)))
-                    else:
-                        b = font_small.render(binding, True, col)
-                        screen.blit(b, b.get_rect(midright=(sim.W - 16, y + 11)))
-
-            # Gamepad controls reference
-            gy = 78 + len(KEY_ACTIONS) * 25 + 12
-            pad_type = "xbox"
-            if pads:
-                try:
-                    pname = list(pads.values())[0].get_name().lower()
-                    if "playstation" in pname or "dual" in pname or "ps" in pname:
-                        pad_type = "ps"
-                    elif "switch" in pname or "nintendo" in pname or "joy-con" in pname:
-                        pad_type = "nintendo"
-                except Exception:
-                    pad_type = "xbox"
-
-            pad_title = f"Gamepad ({pad_type.capitalize()}):" if pads else "Gamepad (Xbox):"
-            screen.blit(font_credits.render(pad_title, True, (190, 210, 195)), (cx, gy))
-            pad_mappings = [
-                ("Steer", "dpad"),
-                ("Side-Bash", "lb" if pad_type != "ps" else "l1"),
-                ("Ram", "a" if pad_type != "ps" else "cross"),
-                ("Drift (hold)", "b" if pad_type != "ps" else "circle"),
-                ("Shoot", "x" if pad_type != "ps" else "square"),
-                ("Cone / Item", "y" if pad_type != "ps" else "triangle"),
-            ]
-            for j, (plbl, pbname) in enumerate(pad_mappings):
-                py_pos = gy + 18 + j * 23
-                screen.blit(font_credits.render(plbl, True, (165, 180, 170)), (cx, py_pos))
-                p_icon = buttonmanager.get_controller_icon(pad_type, pbname, size=21)
-                if p_icon:
-                    screen.blit(p_icon, p_icon.get_rect(midright=(sim.W - 20, py_pos + 8)))
-            back_is_sel = (pads and settings_sel == 15)
-            settings_back_btn.draw(screen, font, settings_back_btn.clicked(mouse_pos) or back_is_sel)
-            if back_is_sel:
-                pygame.draw.rect(screen, (255, 230, 70), settings_back_btn.rect.inflate(8, 8), 2, border_radius=6)
+            screen.blit(_dim_more, (0, 0))
+            if active_slider is not None:       # dragging: the knob follows the mouse
+                tr = active_slider["track"]
+                active_slider["set"](max(0.0, min(1.0, (mouse_pos[0] - tr.x) / tr.w)))
+            rows = settings_rows(set_tab)
+            set_sel = max(0, min(set_sel, len(rows) - 1))
+            if pad_preset == "Trigger Drive":
+                ctrl_pad = [("STEER", ["LS", "DPAD"]), ("GAS / ACCEL", ["RT"]), ("BRAKE", ["LT"]),
+                            ("DRIFT", ["RB"]), ("BASH", ["L3", "R3"]), ("ITEM / SHOOT", ["X"]),
+                            ("DROP HAZARD", ["Y"]), ("PAUSE", ["START"])]
+            elif pad_preset == "Southpaw":
+                ctrl_pad = [("STEER", ["RS"]), ("RAM / GAS", ["A"]), ("BRAKE", ["LT", "↓"]),
+                            ("DRIFT", ["B"]), ("BASH L/R", ["LB", "RB"]), ("ITEM / SHOOT", ["X"]),
+                            ("DROP HAZARD", ["Y"]), ("PAUSE", ["START"])]
+            else:
+                ctrl_pad = [("STEER", ["LS", "DPAD"]), ("RAM / GAS", ["A"]), ("BRAKE", ["LT", "↓"]),
+                            ("DRIFT", ["B"]), ("BASH L/R", ["LB", "RB"]), ("ITEM / SHOOT", ["X"]),
+                            ("DROP HAZARD", ["Y"]), ("PAUSE", ["START"])]
+            ui.draw_settings(screen, SET_TABS, set_tab, settings_view(rows), set_sel, mouse_pos,
+                             awaiting=awaiting_key, pad=bool(pads), pad_rows=ctrl_pad,
+                             chip="PAUSED" if player is not None else None,
+                             device_name=get_input_device_name())
 
         elif state == "results":
+            if frame_state != "results":        # just arrived: replay the slide-in, Race Again first
+                results_t, results_sel = 0.0, 0
+            results_t += dt
             draw_bg()
-            draw_masters_scoreboard(screen, final_order, player, game_mode, team_result, end_title)
-            n_rows = min(8, len(final_order)) if final_order else 5
-            bh = 36 + 18 + n_rows * 21 + 8
-            back_btn.rect = pygame.Rect(sim.W // 2 - 80, 20 + bh + 14, 160, 36)
-            back_btn.draw(screen, font, back_btn.clicked(mouse_pos))
-            if pads:
-                hint_txt = "(A) Play Again     (Y) Next Track     (B) Menu"
-                pad_hint = font_credits.render(hint_txt, True, (255, 235, 120))
-                screen.blit(pad_hint, pad_hint.get_rect(center=(sim.W // 2, 20 + bh + 62)))
+            screen.blit(_dim_more, (0, 0))
+            sub, foot, rows = results_text()
+            ui.draw_results(screen, end_title, rows, t=results_t, sub=sub, chip="FINAL", footer=foot,
+                            buttons=results_buttons(), sel=min(results_sel, len(results_buttons()) - 1),
+                            mouse=mouse_pos, pad=bool(pads), status_col=game_mode in ("battle", "elim"))
 
         elif state == "mode":
             draw_bg()
-            draw_logo()
-            for i, (_, btn) in enumerate(mode_buttons):
-                btn.draw(screen, font_btn, i == mode_sel)
+            ui.draw_menu(screen, [b_.label for _, b_ in mode_buttons], mode_sel, mouse_pos,
+                         **dict(menu_extras(), socials=()))
 
         elif state == "gamemode":
             draw_bg()
@@ -2545,31 +2791,41 @@ def main():
                     rsurf = font_small.render(rtxt, True, rcol)
                     screen.blit(rsurf, (x + 185, y))
                     if i_am_host and not is_me:
-                        kr = pygame.Rect(265, y + 2, 20, 20)
-                        pygame.draw.rect(screen, (150, 50, 50), kr, border_radius=4)
-                        xk = font_small.render("x", True, (255, 255, 255))
+                        kr = pygame.Rect(256, y + 2, 20, 20)
+                        pygame.draw.rect(screen, (170, 50, 50), kr, border_radius=4)
+                        xk = font_credits.render("K", True, (255, 255, 255))
                         screen.blit(xk, xk.get_rect(center=kr.center))
+                        br = pygame.Rect(280, y + 2, 20, 20)
+                        pygame.draw.rect(screen, (120, 30, 30), br, border_radius=4)
+                        xb = font_credits.render("B", True, (255, 255, 255))
+                        screen.blit(xb, xb.get_rect(center=br.center))
 
                 # Match settings on right
-                panel = pygame.Rect(324, 74, 252, 204)
+                panel = pygame.Rect(308, 66, 280, 268)
                 pygame.draw.rect(screen, (20, 28, 24), panel, border_radius=6)
                 pygame.draw.rect(screen, (55, 80, 65), panel, 1, border_radius=6)
-                ps = font_small.render("MATCH SETTINGS", True, UI_ACCENT)
-                screen.blit(ps, ps.get_rect(center=(panel.centerx, 96)))
+                ps = font_credits.render("HOST MATCH RULES", True, UI_ACCENT)
+                screen.blit(ps, ps.get_rect(center=(panel.centerx, 80)))
 
-                host_aggr_btn.label = f"Bots: {lobby_settings.get('bot_aggression', 'Normal')}" + (" >" if i_am_host else "")
-                host_laps_btn.label = f"Laps: {lobby_settings.get('laps', 3)}" + (" >" if i_am_host else "")
-                host_bots_btn.label = f"Grid AI: {str(lobby_settings.get('bot_count', 'fill')).capitalize()}" + (" >" if i_am_host else "")
                 t_lbl = sim.TILESET_TITLES.get(lobby_settings.get('track', 'meadow_dirt'), 'Meadow Dirt')
                 host_track_btn.label = f"Track: {t_lbl}" + (" >" if i_am_host else "")
-                for btn in (host_aggr_btn, host_laps_btn, host_bots_btn, host_track_btn):
+                host_rot_btn.label = f"Rotation: {lobby_settings.get('rotation', 'Host Choice')}" + (" >" if i_am_host else "")
+                host_laps_btn.label = f"Laps: {lobby_settings.get('laps', 3)}" + (" >" if i_am_host else "")
+                host_bots_btn.label = f"Bots: {lobby_settings.get('bot_count', 'Fill to 8')}" + (" >" if i_am_host else "")
+                host_aggr_btn.label = f"AI Aggr: {lobby_settings.get('bot_aggression', 'Casual')}" + (" >" if i_am_host else "")
+                host_coll_btn.label = f"Contact: {lobby_settings.get('collision', 'Full Contact')}" + (" >" if i_am_host else "")
+                host_slip_btn.label = f"Slipstream: {lobby_settings.get('slipstream', 'ON')}" + (" >" if i_am_host else "")
+                host_items_btn.label = f"Items: {lobby_settings.get('items', 'Standard')}" + (" >" if i_am_host else "")
+                host_priv_btn.label = f"Privacy: {lobby_settings.get('privacy', 'Public')}" + (" >" if i_am_host else "")
+                for btn in (host_track_btn, host_rot_btn, host_laps_btn, host_bots_btn, host_aggr_btn,
+                            host_coll_btn, host_slip_btn, host_items_btn, host_priv_btn):
                     pygame.draw.rect(screen, (35, 50, 42), btn.rect, border_radius=4)
                     pygame.draw.rect(screen, (70, 100, 80), btn.rect, 1, border_radius=4)
                     btn.draw(screen, font_credits, i_am_host and btn.clicked(mouse_pos))
 
-                hint_txt = "(Host can click to change)" if i_am_host else "(Host-controlled rules)"
+                hint_txt = "(Host click to cycle · K=Kick B=Ban)" if i_am_host else "(Host-controlled rules)"
                 hint_s = font_credits.render(hint_txt, True, (150, 180, 160))
-                screen.blit(hint_s, hint_s.get_rect(center=(panel.centerx, 260)))
+                screen.blit(hint_s, hint_s.get_rect(center=(panel.centerx, 320)))
 
                 ready_btn.label = "Unready" if my_ready else "Ready"
                 ready_btn.draw(screen, font_small, my_ready or ready_btn.clicked(mouse_pos))

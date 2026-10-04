@@ -84,10 +84,16 @@ class Player:
 
 
 DEFAULT_ROOM_SETTINGS = {
-    "bot_aggression": "Normal",
+    "bot_aggression": "Casual",
     "laps": 3,
     "bot_count": "fill",
     "track": "meadow_dirt",
+    "rotation": "Host Choice",
+    "collision": "Full Contact",
+    "privacy": "Public",
+    "slipstream": "ON",
+    "items": "Standard",
+    "spectate": "ON",
 }
 
 
@@ -101,6 +107,7 @@ class Room:
         self.players = {}
         self.next_id = 1
         self.name = host_name
+        self.banned_names = set()
         self.settings = dict(DEFAULT_ROOM_SETTINGS)
         if isinstance(settings, dict):
             self.settings.update(settings)
@@ -195,6 +202,9 @@ async def owner_add_player(code, inst, cid, name, flag):
     if room is None:
         await send_one(inst, cid, {"t": "err", "msg": "No room with that code"})
         return
+    if name and name.lower() in getattr(room, "banned_names", set()):
+        await send_one(inst, cid, {"t": "err", "msg": "You are banned from this room"})
+        return
     if room.started:
         await send_one(inst, cid, {"t": "err", "msg": "Race already started"})
         return
@@ -237,15 +247,18 @@ async def owner_handle_frame(code, inst, cid, msg):
         await cache_room(room)
         if room.all_ready() and not room.started:
             await start_race(room)
-    elif t == "kick" and me.id == room.host_id:
+    elif t in ("kick", "ban") and me.id == room.host_id:
         target = room.players.get(int(msg.get("id", -1)))
         if target and target.id != room.host_id:
-            await send_player(target, {"t": "kicked"})
+            if t == "ban":
+                room.banned_names.add(target.name.lower())
+            await send_player(target, {"t": "kicked" if t == "kick" else "banned"})
             await close_player(target)
     elif t == "settings" and me.id == room.host_id:
         st = msg.get("settings")
         if isinstance(st, dict):
-            for k in ("bot_aggression", "laps", "bot_count", "track"):
+            for k in ("bot_aggression", "laps", "bot_count", "track", "rotation",
+                      "collision", "privacy", "slipstream", "items", "spectate"):
                 if k in st:
                     room.settings[k] = st[k]
             await broadcast(room, room.room_msg())
@@ -286,6 +299,8 @@ async def handler(ws):
     code = None
     owner = None
     try:
+        # a dropped/half-open socket raises ConnectionClosed from the iterator itself;
+        # that's a normal disconnect, not a handler failure, so swallow it quietly
         async for raw in ws:
             try:
                 msg = json.loads(raw)
@@ -325,6 +340,8 @@ async def handler(ws):
             else:
                 await bus_publish(owner, {"t": "edge_frame", "code": code, "inst": INST,
                                           "cid": cid, "msg": msg})
+    except websockets.exceptions.ConnectionClosed:
+        pass
     finally:
         LOCAL_WS.pop(cid, None)
         if code is not None and owner is not None:
