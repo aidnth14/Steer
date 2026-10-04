@@ -8,6 +8,7 @@
 # not cross-compile. For macOS Intel vs Apple Silicon, run on an x86_64 and an arm64 machine
 # (or the two macOS runners in .github/workflows/build.yml).
 
+import os
 import sys
 from pathlib import Path
 
@@ -16,7 +17,18 @@ ICON = None
 if (ROOT / "assets" / "UI" / "logo.png").exists():
     ICON = None                                 # swap in a .ico/.icns here once you have one
 
+# Smallest build without dropping content: strip symbols, trim stdlib/3rd-party modules the game
+# never imports, and (macOS) thin the universal2 binaries to ONE arch via STEER_ARCH so an Intel
+# app isn't carrying arm64 code and vice-versa. STEER_ARCH = "x86_64" | "arm64" | unset(=native).
 block_cipher = None
+TARGET_ARCH = os.environ.get("STEER_ARCH") or None
+STRIP = sys.platform != "win32"                 # strip is a no-op/harmful on Windows
+
+EXCLUDES = [
+    "tkinter", "redis", "numpy", "pytest", "_pytest", "setuptools", "pip", "wheel",
+    "unittest", "pydoc", "doctest", "lib2to3", "distutils", "test", "xmlrpc",
+    "plyer",            # Android-only gyro backend; desktop uses SDL sensors / none
+]
 
 a = Analysis(
     [str(ROOT / "main.py")],
@@ -26,7 +38,7 @@ a = Analysis(
     hiddenimports=["pygame._sdl2", "pygame._sdl2.controller"],
     hookspath=[],
     runtime_hooks=[],
-    excludes=["tkinter", "redis", "numpy", "pytest"],   # server-only / test-only deps
+    excludes=EXCLUDES,
     cipher=block_cipher,
     noarchive=False,
 )
@@ -37,14 +49,15 @@ exe = EXE(
     exclude_binaries=True,
     name="Steer",
     debug=False,
-    strip=False,
-    upx=False,
+    strip=STRIP,
+    upx=False,                  # UPX breaks codesign on macOS arm64 and triggers AV on Windows
     console=False,              # windowed app (no terminal)
     icon=ICON,
+    target_arch=TARGET_ARCH,
 )
 coll = COLLECT(
     exe, a.binaries, a.zipfiles, a.datas,
-    strip=False, upx=False, name="Steer",
+    strip=STRIP, upx=False, name="Steer",
 )
 
 if sys.platform == "darwin":

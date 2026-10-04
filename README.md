@@ -3,12 +3,24 @@
 2D top-down kart racing in pygame. The kart always drives forward: you steer, and you
 fight. Bash rivals off the dirt road into the fence before they do it to you.
 
-## Run
+**Version 1.2.0** · Online multiplayer live on Render · Windows / macOS (Intel + Apple Silicon)
+/ Linux / Android · Source-available (see [LICENSE](LICENSE)).
+
+## Run from source
 
 ```
 cd ~/Desktop/steer
+python3 -m pip install -r requirements.txt
 python3 main.py
 ```
+
+## Download / build
+
+Pre-built apps are produced per platform by `.github/workflows/build.yml` (run it from the
+repo's **Actions** tab or on a `v*` tag) and locally via the scripts in [`packaging/`](packaging).
+PyInstaller does not cross-compile, so each desktop target is built on its own OS/arch; Android
+uses Buildozer. See [`packaging/README.md`](packaging/README.md) for the full matrix and signing
+notes. The game ships online-ready — it auto-connects to the live server in `server_url.txt`.
 
 ## Controls
 
@@ -396,6 +408,16 @@ This project features music from talented independent composers and chiptune art
 - **Source / License:** Creative Commons Attribution 4.0 International (CC BY 4.0) ([https://paperhatlizard.itch.io/cryos-mini-gui-social-buttons](https://paperhatlizard.itch.io/cryos-mini-gui-social-buttons))
 - **Keyboard & Controller Buttons:** Controller & Keyboard Icons by Vryell
 - **Source / License:** Free for Personal & Commercial Use ([https://vryell.itch.io/](https://vryell.itch.io/))
+
+---
+
+## License
+
+Steer is **source-available**: © 2026 Aiden Shoroz, all rights reserved — see [LICENSE](LICENSE).
+You may view, build, and run it for personal, non-commercial evaluation; redistribution or
+commercial use needs written permission. The bundled third-party fonts, music, sound effects,
+and icons listed above are **not** covered by that license and remain under their own terms
+(CC BY 4.0 / free-for-commercial); comply with each when redistributing those files.
 
 ---
 

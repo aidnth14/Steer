@@ -1,0 +1,39 @@
+Steer — Source-Available License
+Copyright (c) 2026 Aiden Shoroz. All rights reserved.
+
+1. Original work
+   The original source code and original artwork, design, and audio authored for
+   Steer (collectively, the "Original Work") are the property of the copyright
+   holder. The repository is made source-available for reference and learning.
+
+2. Grant
+   You may view, clone, build, and run the Original Work for personal,
+   non-commercial evaluation and learning. You may submit contributions back to
+   the project.
+
+3. Restrictions
+   Without the prior written permission of the copyright holder, you may NOT:
+   (a) redistribute, sublicense, sell, or publish the Original Work or builds of
+       it, in whole or in part;
+   (b) use the Original Work, or substantial portions of it, in another product;
+   (c) remove or alter this notice or the attributions in README.md.
+
+4. Third-party assets
+   Steer bundles fonts, music, sound effects, and icons created by third parties.
+   Those files are NOT part of the Original Work and remain licensed by their
+   respective authors under their own terms (e.g. CC BY 4.0, "free for personal &
+   commercial use"). The full attributions and license links are listed in
+   README.md ("Credits"). When you redistribute any bundled third-party asset you
+   must comply with that asset's license, including attribution where required.
+
+5. No warranty
+   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+   IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+   FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+   AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+   LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+   OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+   SOFTWARE.
+
+For commercial licensing or redistribution permission, contact the copyright
+holder via the links in README.md.
