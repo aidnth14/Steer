@@ -14,6 +14,15 @@ python3 -m pip install -r requirements.txt
 python3 main.py
 ```
 
+## Launching a downloaded build
+
+These builds are **unsigned** (no paid Apple/Microsoft certificate), so the OS may warn on first launch:
+
+- **macOS**: right-click (or Control-click) **Steer.app → Open → Open**. Do this once; afterwards it launches normally. If it says *"damaged"* because it was downloaded, run `xattr -dr com.apple.quarantine Steer.app` in Terminal, then open.
+- **Windows**: on the SmartScreen prompt click **More info → Run anyway**, then run `Steer.exe`.
+- **Linux**: `chmod +x Steer/Steer` then run `./Steer/Steer`.
+- **Android**: enable **Install unknown apps** for your browser/file manager, then open the APK.
+
 ## Download / build
 
 Pre-built apps are produced per platform by `.github/workflows/build.yml` (run it from the
