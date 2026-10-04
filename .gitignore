@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+venv/
+.venv/
+.DS_Store
+shot_*.png
+shots/
+assets/sound/music/
+server.log
+.kilo/

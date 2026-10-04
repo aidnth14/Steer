@@ -1,0 +1,59 @@
+{
+ "tile_size": 16,
+ "tilesets": [
+  {
+   "id": "meadow_dirt",
+   "title": "Meadow Dirt (original)",
+   "description": "Your tiles as they are: red-brown dirt through bright grass.",
+   "original": true,
+   "folder": "meadow_dirt",
+   "ground": "#3e9b48",
+   "road": "#b86f50"
+  },
+  {
+   "id": "asphalt_circuit",
+   "title": "Grand Prix Circuit",
+   "description": "Dark asphalt through the same grass, with red and white kerbs on every edge.",
+   "original": false,
+   "folder": "asphalt_circuit",
+   "ground": "#3e9b48",
+   "road": "#464a55"
+  },
+  {
+   "id": "canyon_sand",
+   "title": "Red Canyon",
+   "description": "A pale sand road cut through red canyon rock.",
+   "original": false,
+   "folder": "canyon_sand",
+   "ground": "#94493a",
+   "road": "#dab163"
+  },
+  {
+   "id": "frost_pass",
+   "title": "Frost Pass",
+   "description": "A packed-snow road through deep snow, with a steel-grey snowbank edge.",
+   "original": false,
+   "folder": "frost_pass",
+   "ground": "#f0f8ff",
+   "road": "#7e8f9a"
+  },
+  {
+   "id": "harvest_mud",
+   "title": "Harvest Mud",
+   "description": "A dark mud road through golden autumn fields.",
+   "original": false,
+   "folder": "harvest_mud",
+   "ground": "#ce9248",
+   "road": "#6e4c30"
+  },
+  {
+   "id": "neon_night",
+   "title": "Neon Night",
+   "description": "Slate asphalt at night with neon-cyan edges glowing onto the road.",
+   "original": false,
+   "folder": "neon_night",
+   "ground": "#171524",
+   "road": "#3e3b65"
+  }
+ ]
+}

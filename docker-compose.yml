@@ -1,0 +1,21 @@
+# Local multi-instance Steer server behind Redis.
+# `docker compose up --scale server=3` runs three server replicas sharing lobbies through
+# Redis. Each replica gets its own host port from the range below (8765, 8766, 8767): compose
+# does NOT load-balance one host port, and a single fixed "8765:8765" can't be bound three times.
+# Host a lobby via ws://localhost:8765 and join it via ws://localhost:8766 to test sharing.
+services:
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    ports:
+      - "6379:6379"
+
+  server:
+    build: .
+    environment:
+      PORT: "8765"
+      REDIS_URL: "redis://redis:6379"
+    ports:
+      - "8765-8767:8765"
+    depends_on:
+      - redis

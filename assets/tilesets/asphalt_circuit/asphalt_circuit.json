@@ -1,0 +1,639 @@
+{
+ "id": "asphalt_circuit",
+ "title": "Grand Prix Circuit",
+ "description": "Dark asphalt through the same grass, with red and white kerbs on every edge.",
+ "original": false,
+ "tile_size": 16,
+ "install": {
+  "track_tiles": "copy track_tiles/*.png over assets/track_tiles/",
+  "oil_track": "copy oil_track.png over assets/oil_track.png"
+ },
+ "colours": {
+  "ground": "#3e9b48",
+  "ground_shade": "#265c42",
+  "lip_outline": "#193c3e",
+  "road": "#464a55",
+  "road_shadow": "#292e3a",
+  "check_dark": "#000000",
+  "check_light": "#ffffff"
+ },
+ "edge_treatment": {
+  "kerb": {
+   "a": "#ec273f",
+   "b": "#f0f8ff",
+   "a_shadow": "#ac2847",
+   "b_shadow": "#a5bece",
+   "width": 2,
+   "stripe": 4
+  }
+ },
+ "game_reads": {
+  "GRASS_COLOR": "#3e9b48  (from dirt_corner_tl at 0,0: the off-road fill)",
+  "DIRT_COLOR": "#464a55  (from dirt_center at 8,8: the road fill)",
+  "oil_track_key": "#b86f50 is a colour key in oil_track.png (not drawn); keep it"
+ },
+ "hints": {
+  "music": "07 Grand Prix, 03 Final Lap",
+  "grip": {
+   "road": 1.1,
+   "off_road": 0.6
+  },
+  "skid_marks": {
+   "road": "#10121c",
+   "off_road": "#282a18"
+  },
+  "fence": "steel guardrail: the fence pieces recoloured to #a5bece / #757a8b, or tyre walls",
+  "note": "hints aren't read by the game yet; they're suggestions for when per-tileset physics / skid colours get wired up"
+ },
+ "atlas": {
+  "file": "asphalt_circuit_sheet.png",
+  "columns": 5,
+  "rows": 6,
+  "empty_cells": [
+   [
+    3,
+    2
+   ],
+   [
+    4,
+    2
+   ],
+   [
+    0,
+    3
+   ],
+   [
+    2,
+    3
+   ],
+   [
+    3,
+    3
+   ],
+   [
+    4,
+    3
+   ],
+   [
+    3,
+    4
+   ],
+   [
+    4,
+    4
+   ],
+   [
+    0,
+    5
+   ],
+   [
+    2,
+    5
+   ],
+   [
+    3,
+    5
+   ],
+   [
+    4,
+    5
+   ]
+  ]
+ },
+ "tiles": [
+  {
+   "id": 0,
+   "name": "dirt_corner_tl",
+   "file": "track_tiles/dirt_corner_tl.png",
+   "role": "outer corner",
+   "atlas_rect": [
+    0,
+    0,
+    16,
+    16
+   ],
+   "offroad_corners": {
+    "tl": 1,
+    "tr": 1,
+    "bl": 1,
+    "br": 0
+   },
+   "offroad_px": 160,
+   "colours": [
+    "#193c3e",
+    "#265c42",
+    "#3e9b48",
+    "#464a55",
+    "#a5bece",
+    "#ac2847",
+    "#ec273f",
+    "#f0f8ff"
+   ]
+  },
+  {
+   "id": 1,
+   "name": "dirt_edge_top",
+   "file": "track_tiles/dirt_edge_top.png",
+   "role": "edge",
+   "atlas_rect": [
+    16,
+    0,
+    16,
+    16
+   ],
+   "offroad_corners": {
+    "tl": 1,
+    "tr": 1,
+    "bl": 0,
+    "br": 0
+   },
+   "offroad_px": 112,
+   "colours": [
+    "#193c3e",
+    "#265c42",
+    "#3e9b48",
+    "#464a55",
+    "#a5bece",
+    "#ac2847",
+    "#ec273f",
+    "#f0f8ff"
+   ]
+  },
+  {
+   "id": 2,
+   "name": "dirt_corner_tr",
+   "file": "track_tiles/dirt_corner_tr.png",
+   "role": "outer corner",
+   "atlas_rect": [
+    32,
+    0,
+    16,
+    16
+   ],
+   "offroad_corners": {
+    "tl": 1,
+    "tr": 1,
+    "bl": 0,
+    "br": 1
+   },
+   "offroad_px": 142,
+   "colours": [
+    "#193c3e",
+    "#265c42",
+    "#3e9b48",
+    "#464a55",
+    "#a5bece",
+    "#ac2847",
+    "#ec273f",
+    "#f0f8ff"
+   ]
+  },
+  {
+   "id": 3,
+   "name": "dirt_edge_left",
+   "file": "track_tiles/dirt_edge_left.png",
+   "role": "edge",
+   "atlas_rect": [
+    0,
+    16,
+    16,
+    16
+   ],
+   "offroad_corners": {
+    "tl": 1,
+    "tr": 0,
+    "bl": 1,
+    "br": 0
+   },
+   "offroad_px": 90,
+   "colours": [
+    "#193c3e",
+    "#265c42",
+    "#3e9b48",
+    "#464a55",
+    "#a5bece",
+    "#ac2847",
+    "#ec273f",
+    "#f0f8ff"
+   ]
+  },
+  {
+   "id": 4,
+   "name": "dirt_center",
+   "file": "track_tiles/dirt_center.png",
+   "role": "fill",
+   "atlas_rect": [
+    16,
+    16,
+    16,
+    16
+   ],
+   "offroad_corners": {
+    "tl": 0,
+    "tr": 0,
+    "bl": 0,
+    "br": 0
+   },
+   "offroad_px": 0,
+   "colours": [
+    "#464a55"
+   ]
+  },
+  {
+   "id": 5,
+   "name": "dirt_edge_right",
+   "file": "track_tiles/dirt_edge_right.png",
+   "role": "edge",
+   "atlas_rect": [
+    32,
+    16,
+    16,
+    16
+   ],
+   "offroad_corners": {
+    "tl": 0,
+    "tr": 1,
+    "bl": 0,
+    "br": 1
+   },
+   "offroad_px": 61,
+   "colours": [
+    "#193c3e",
+    "#265c42",
+    "#3e9b48",
+    "#464a55",
+    "#a5bece",
+    "#ac2847",
+    "#ec273f",
+    "#f0f8ff"
+   ]
+  },
+  {
+   "id": 6,
+   "name": "dirt_corner_bl",
+   "file": "track_tiles/dirt_corner_bl.png",
+   "role": "outer corner",
+   "atlas_rect": [
+    0,
+    32,
+    16,
+    16
+   ],
+   "offroad_corners": {
+    "tl": 1,
+    "tr": 0,
+    "bl": 1,
+    "br": 1
+   },
+   "offroad_px": 157,
+   "colours": [
+    "#193c3e",
+    "#265c42",
+    "#3e9b48",
+    "#464a55",
+    "#a5bece",
+    "#ac2847",
+    "#ec273f",
+    "#f0f8ff"
+   ]
+  },
+  {
+   "id": 7,
+   "name": "dirt_edge_bottom",
+   "file": "track_tiles/dirt_edge_bottom.png",
+   "role": "edge",
+   "atlas_rect": [
+    16,
+    32,
+    16,
+    16
+   ],
+   "offroad_corners": {
+    "tl": 0,
+    "tr": 0,
+    "bl": 1,
+    "br": 1
+   },
+   "offroad_px": 90,
+   "colours": [
+    "#193c3e",
+    "#265c42",
+    "#3e9b48",
+    "#464a55",
+    "#ec273f",
+    "#f0f8ff"
+   ]
+  },
+  {
+   "id": 8,
+   "name": "dirt_corner_br",
+   "file": "track_tiles/dirt_corner_br.png",
+   "role": "outer corner",
+   "atlas_rect": [
+    32,
+    32,
+    16,
+    16
+   ],
+   "offroad_corners": {
+    "tl": 0,
+    "tr": 1,
+    "bl": 1,
+    "br": 1
+   },
+   "offroad_px": 125,
+   "colours": [
+    "#193c3e",
+    "#265c42",
+    "#3e9b48",
+    "#464a55",
+    "#a5bece",
+    "#ac2847",
+    "#ec273f",
+    "#f0f8ff"
+   ]
+  },
+  {
+   "id": 9,
+   "name": "dirt_inner_tl",
+   "file": "track_tiles/dirt_inner_tl.png",
+   "role": "inner corner",
+   "atlas_rect": [
+    48,
+    0,
+    16,
+    16
+   ],
+   "offroad_corners": {
+    "tl": 1,
+    "tr": 0,
+    "bl": 0,
+    "br": 0
+   },
+   "offroad_px": 34,
+   "colours": [
+    "#193c3e",
+    "#265c42",
+    "#3e9b48",
+    "#464a55",
+    "#ac2847",
+    "#ec273f",
+    "#f0f8ff"
+   ]
+  },
+  {
+   "id": 10,
+   "name": "dirt_inner_tr",
+   "file": "track_tiles/dirt_inner_tr.png",
+   "role": "inner corner",
+   "atlas_rect": [
+    64,
+    0,
+    16,
+    16
+   ],
+   "offroad_corners": {
+    "tl": 0,
+    "tr": 1,
+    "bl": 0,
+    "br": 0
+   },
+   "offroad_px": 25,
+   "colours": [
+    "#193c3e",
+    "#265c42",
+    "#3e9b48",
+    "#464a55",
+    "#a5bece",
+    "#ac2847",
+    "#ec273f",
+    "#f0f8ff"
+   ]
+  },
+  {
+   "id": 11,
+   "name": "dirt_inner_bl",
+   "file": "track_tiles/dirt_inner_bl.png",
+   "role": "inner corner",
+   "atlas_rect": [
+    48,
+    16,
+    16,
+    16
+   ],
+   "offroad_corners": {
+    "tl": 0,
+    "tr": 0,
+    "bl": 1,
+    "br": 0
+   },
+   "offroad_px": 34,
+   "colours": [
+    "#193c3e",
+    "#265c42",
+    "#3e9b48",
+    "#464a55",
+    "#a5bece",
+    "#ac2847",
+    "#ec273f",
+    "#f0f8ff"
+   ]
+  },
+  {
+   "id": 12,
+   "name": "dirt_inner_br",
+   "file": "track_tiles/dirt_inner_br.png",
+   "role": "inner corner",
+   "atlas_rect": [
+    64,
+    16,
+    16,
+    16
+   ],
+   "offroad_corners": {
+    "tl": 0,
+    "tr": 0,
+    "bl": 0,
+    "br": 1
+   },
+   "offroad_px": 21,
+   "colours": [
+    "#193c3e",
+    "#265c42",
+    "#3e9b48",
+    "#464a55",
+    "#a5bece",
+    "#ac2847",
+    "#ec273f",
+    "#f0f8ff"
+   ]
+  },
+  {
+   "id": 13,
+   "name": "checktile",
+   "file": "track_tiles/checktile.png",
+   "role": "finish line fill",
+   "atlas_rect": [
+    16,
+    64,
+    16,
+    16
+   ],
+   "offroad_corners": {
+    "tl": 0,
+    "tr": 0,
+    "bl": 0,
+    "br": 0
+   },
+   "offroad_px": 0,
+   "colours": [
+    "#000000",
+    "#ffffff"
+   ]
+  },
+  {
+   "id": 14,
+   "name": "checktile1",
+   "file": "track_tiles/checktile1.png",
+   "role": "finish line, left edge",
+   "atlas_rect": [
+    0,
+    64,
+    16,
+    16
+   ],
+   "offroad_corners": {
+    "tl": 1,
+    "tr": 0,
+    "bl": 1,
+    "br": 0
+   },
+   "offroad_px": 90,
+   "colours": [
+    "#000000",
+    "#193c3e",
+    "#265c42",
+    "#3e9b48",
+    "#ffffff"
+   ]
+  },
+  {
+   "id": 15,
+   "name": "checktile2",
+   "file": "track_tiles/checktile2.png",
+   "role": "finish line, right edge",
+   "atlas_rect": [
+    32,
+    64,
+    16,
+    16
+   ],
+   "offroad_corners": {
+    "tl": 0,
+    "tr": 1,
+    "bl": 0,
+    "br": 1
+   },
+   "offroad_px": 61,
+   "colours": [
+    "#000000",
+    "#193c3e",
+    "#265c42",
+    "#3e9b48",
+    "#ffffff"
+   ]
+  },
+  {
+   "id": 16,
+   "name": "checktile3",
+   "file": "track_tiles/checktile3.png",
+   "role": "finish line, top edge",
+   "atlas_rect": [
+    16,
+    48,
+    16,
+    16
+   ],
+   "offroad_corners": {
+    "tl": 1,
+    "tr": 1,
+    "bl": 0,
+    "br": 0
+   },
+   "offroad_px": 112,
+   "colours": [
+    "#000000",
+    "#193c3e",
+    "#265c42",
+    "#3e9b48",
+    "#ffffff"
+   ]
+  },
+  {
+   "id": 17,
+   "name": "checktile4",
+   "file": "track_tiles/checktile4.png",
+   "role": "finish line, bottom edge",
+   "atlas_rect": [
+    16,
+    80,
+    16,
+    16
+   ],
+   "offroad_corners": {
+    "tl": 0,
+    "tr": 0,
+    "bl": 1,
+    "br": 1
+   },
+   "offroad_px": 90,
+   "colours": [
+    "#000000",
+    "#193c3e",
+    "#265c42",
+    "#3e9b48",
+    "#ffffff"
+   ]
+  }
+ ],
+ "oil_track": {
+  "file": "oil_track.png",
+  "size": [
+   48,
+   48
+  ],
+  "slices": {
+   "top": [
+    16,
+    0,
+    16,
+    16
+   ],
+   "left": [
+    0,
+    16,
+    16,
+    16
+   ],
+   "center": [
+    16,
+    16,
+    16,
+    16
+   ],
+   "right": [
+    32,
+    16,
+    16,
+    16
+   ],
+   "bottom": [
+    16,
+    32,
+    16,
+    16
+   ]
+  },
+  "rim": null
+ }
+}

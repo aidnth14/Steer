@@ -1,0 +1,30 @@
+# Render Blueprint for the Steer multiplayer server.
+# Push this repo to GitHub, then on Render: New -> Blueprint -> pick this repo -> Apply.
+# Render injects $PORT; server.py binds 0.0.0.0:$PORT and speaks WebSocket (wss://).
+# The public URL it gives you (wss://steer-server.onrender.com) is what clients set as
+# STEER_SERVER_URL.
+#
+# Redis is OPTIONAL. One web instance comfortably handles 7-10 lobbies in memory. The Key
+# Value (Redis) service + REDIS_URL below lets you run MULTIPLE web instances that share
+# lobbies (set the web service's instance count > 1 in the dashboard to scale out).
+services:
+  - type: web
+    name: steer-server
+    runtime: python
+    plan: free
+    buildCommand: pip install "websockets>=14" "redis>=5"
+    startCommand: python server.py
+    healthCheckPath: /
+    envVars:
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: steer-kv
+          property: connectionString
+
+  # Render's managed Redis (now called "Key Value"). If your account still exposes the older
+  # `type: redis`, rename this block's type to `redis` and keep the same name/property.
+  - type: keyvalue
+    name: steer-kv
+    plan: free
+    ipAllowList: []     # only reachable from your Render services
