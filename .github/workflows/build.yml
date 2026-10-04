@@ -57,8 +57,10 @@ jobs:
             autoconf automake libtool libtool-bin libltdl-dev m4 pkg-config \
             autopoint gettext zlib1g-dev libncurses-dev libffi-dev libssl-dev
           python -m pip install --upgrade pip
-          # pin a known-good buildozer/cython combo (newer p4a defaults pull an unstable Python)
-          python -m pip install "buildozer==1.5.0" "cython==0.29.36"
+          # Pin the whole toolchain. buildozer uses the pip-installed python-for-android; the
+          # latest p4a builds Python 3.14 (whose removed longintrepr.h breaks the pygame recipe),
+          # so pin p4a 2024.1.21 -> Python 3.11, which the pygame recipe compiles against.
+          python -m pip install "buildozer==1.5.0" "python-for-android==2024.1.21" "cython==0.29.36"
       - name: Build debug APK
         run: buildozer -v android debug
       - uses: actions/upload-artifact@v4
