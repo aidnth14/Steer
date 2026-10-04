@@ -78,13 +78,13 @@ Settings are organized across four dedicated tabs with persistent profile storag
    - **UI Audio Volume:** Countdown beeps, menu blips, and lap chimes (0% to 100%).
 
 3. **🖥️ VIDEO:**
-   - **Display Mode:** Exclusive Fullscreen, Borderless Windowed, Windowed.
-   - **Pixel-Perfect Scaling:** Toggle (constrains scaling to integer multipliers).
+   - **Display Mode:** Exclusive Fullscreen, Borderless Windowed, Windowed (freely resizable — drag any edge). Press **F11** anywhere to toggle fullscreen.
+   - **Pixel-Perfect Scaling:** Toggle — the game renders at a fixed 600×400 and SDL (`pygame.SCALED`) scales that to any window size or fullscreen with aspect-preserving letterbox bars; this switches the filter between nearest-neighbour (crisp integer pixels) and smooth linear.
    - **V-Sync & Frame Rate Cap:** 60 FPS, 120 FPS, 144 FPS, Unlimited, V-Sync On.
    - **Camera Zoom:** 0.6x (close-up) to 1.6x (wide view).
-   - **Camera Shake:** 0.0 (disabled) to 2.0 (maximum trauma).
+   - **Camera Shake:** 0.0 (disabled) to 2.0 (maximum trauma). Drives impact trauma plus continuous rumble from speed, grass bounce and boost, and a subtle handheld cinematic sway.
    - **Fog Density:** 0.0 to 1.0 depth fog alpha.
-   - **Shader Presets:** NONE, CRT, CYBERPUNK, NOIR, CINEMATIC, SUNSET.
+   - **Shader Presets:** NONE, CRT, CYBERPUNK, NOIR, CINEMATIC, SUNSET, ACTION, VHS. Each preset is a real full-frame colour grade (multiply + additive lift) layered with fog, vignette, scanlines and animated film grain — so the moody presets now read distinctly.
    - **Scanlines:** OFF, LOW, MED, HIGH.
    - **Vignette:** Toggle (ON / OFF).
    - **Dynamic Drop Shadows:** Toggle (ON / OFF).
@@ -97,6 +97,7 @@ Settings are organized across four dedicated tabs with persistent profile storag
      - *Trigger Drive:* Gas on RT/R2, Brake on LT/L2, Drift on RB/R1, Bash on Stick Clicks (L3/R3).
      - *Southpaw:* Swaps steering control to the Right Analog Stick.
    - **Mouse Aim Mode:** Toggle (aim projectiles with cursor within 170° forward arc; Left-Click shoot, Right-Click drop hazard).
+   - **Gyro Steering (mobile/web):** Toggle tilt-to-steer on phones/tablets (plyer accelerometer on Android, DeviceOrientation on web, SDL sensors on native mobile ports). **Gyro Sens** slider sets how much tilt equals a full turn, and **Recenter Gyro** captures your current hold angle as straight-ahead. Off by default; on desktop it stays dormant.
    - **Full Keyboard Rebinding Matrix:** Steer Left, Steer Right, Accelerate/Ram, Brake/Reverse, Drift (Hold), Bash Left, Bash Right, Use Item/Shoot, Drop Hazard Behind.
 
 ### Vehicle & Sprite Stacking

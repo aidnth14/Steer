@@ -8,3 +8,12 @@ shots/
 assets/sound/music/
 server.log
 .kilo/
+
+# packaging / build artifacts
+build/
+dist/
+*.manifest
+bin/
+.buildozer/
+*.apk
+*.aab

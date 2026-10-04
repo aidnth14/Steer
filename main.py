@@ -92,7 +92,7 @@ KEY_ACTIONS = [
 ]
 
 GAME_MODES = [("race", "Race"), ("trial", "Time Trial"), ("elim", "Elimination"),
-              ("battle", "Battle"), ("team", "Team Race")]
+              ("team", "Team Race")]
 ELIM_INTERVAL = 8.0     # seconds between eliminations in Elimination mode
 TEAM_COLORS = [(230, 70, 70), (70, 120, 235)]   # red / blue teams
 MENU_STATES = {"menu", "mode", "gamemode", "mp_menu",
@@ -109,6 +109,7 @@ def load_profile():
         "invert_steer": False, "look_ahead_cam": False, "ghost_opacity": 0.6,
         "display_mode": "Windowed", "pixel_perfect": False, "fps_cap": "60 FPS",
         "show_fps": False, "pad_preset": "Arcade Classic", "mouse_aim": True,
+        "gyro_steer": False, "gyro_sens": 0.5,
         "keys": {}, "shaders": dict(sim.SHADER_SETTINGS),
         "bot_aggression": "Casual", "track_type": "meadow_dirt"
     }
@@ -261,7 +262,7 @@ def load_social_buttons():
         {"name": "discord", "r": 0, "c": 4, "url": "https://discord.com/users/1125415771737182310", "tooltip": "Discord"},
     ]
 
-    btn_size = 21  # Native 16x16 scaled up by 5px
+    btn_size = 24  # native 16x16 scaled to fill the social button slot
     buttons = []
     for item in config:
         r, c = item["r"], item["c"]
@@ -473,28 +474,46 @@ def main():
     mouse_aim = bool(profile.get("mouse_aim", False))
     show_fps = bool(profile.get("show_fps", False))
 
+    # The game renders at a fixed 600x400; pygame.SCALED hands that logical surface to SDL,
+    # which scales it (GPU, aspect-preserved, letterboxed) to any window size or fullscreen and
+    # auto-maps mouse coords back to 600x400 -- so all UI hit-testing stays in logical space.
     def apply_display(mode=None, px_perf=None, vsync_opt=None):
-        nonlocal display_mode, pixel_perfect, fps_cap_setting
+        nonlocal display_mode, pixel_perfect, fps_cap_setting, screen
         if mode is not None: display_mode = mode
         if px_perf is not None: pixel_perfect = px_perf
         if vsync_opt is not None: fps_cap_setting = vsync_opt
 
+        # nearest-neighbour when pixel-perfect, else smooth linear filtering
+        os.environ["SDL_HINT_RENDER_SCALE_QUALITY"] = "0" if pixel_perfect else "1"
         vsync_val = 1 if fps_cap_setting == "V-Sync On" else 0
-        flags = 0
+        flags = pygame.SCALED
         if display_mode == "Exclusive Fullscreen":
-            flags = pygame.FULLSCREEN | (pygame.SCALED if pixel_perfect else 0)
+            flags |= pygame.FULLSCREEN
         elif display_mode == "Borderless Windowed":
-            flags = pygame.NOFRAME
+            flags |= pygame.NOFRAME
         else:
-            flags = pygame.RESIZABLE if pixel_perfect else 0
-
+            flags |= pygame.RESIZABLE
         try:
-            return pygame.display.set_mode((sim.W, sim.H), flags, vsync=vsync_val)
+            screen = pygame.display.set_mode((sim.W, sim.H), flags, vsync=vsync_val)
         except (TypeError, pygame.error):
-            return pygame.display.set_mode((sim.W, sim.H), flags)
+            # headless / dummy video drivers can't build a SCALED renderer: fall back plain
+            try:
+                screen = pygame.display.set_mode((sim.W, sim.H), flags & ~pygame.SCALED)
+            except pygame.error:
+                screen = pygame.display.set_mode((sim.W, sim.H))
+        return screen
+
+    def toggle_fullscreen():
+        apply_display("Windowed" if display_mode == "Exclusive Fullscreen"
+                      else "Exclusive Fullscreen")
+        profile["display_mode"] = display_mode
+        profile["fullscreen"] = (display_mode == "Exclusive Fullscreen")
+        save_profile(profile)
 
     screen = apply_display()
     pygame.display.set_caption("Steer")
+    screen.fill((0, 0, 0))              # paint black now so loading never flashes a stale buffer
+    pygame.display.flip()
     clock = pygame.time.Clock()
     sim.load_assets()
     social_buttons = load_social_buttons()
@@ -516,7 +535,7 @@ def main():
         if not sdlctrl.is_controller(device_index):
             return
         pad = sdlctrl.Controller(device_index)
-        pads[pad.get_id()] = pad
+        pads[pad.id] = pad
         print("controller connected:", sdlctrl.name_forindex(device_index))
 
     for i in range(sdlctrl.get_count()):
@@ -591,6 +610,9 @@ def main():
         "smooth_steer": 0.0,
         "source": "none",
         "active": False,
+        "enabled": bool(profile.get("gyro_steer", False)),  # user toggle (Settings -> Controls)
+        "sens": float(profile.get("gyro_sens", 0.5)),        # 0..1, higher = less tilt for full lock
+        "neutral": 0.0,                                      # calibrated level-hold offset
     }
 
     # 1. HTML5 / Pygbag / Emscripten browser DeviceOrientation
@@ -666,16 +688,24 @@ def main():
         pass
 
     GYRO_DEADZONE = 0.06       # ~3.5 deg deadzone
-    GYRO_MAX_DEG = 25.0        # 25 degrees tilt = 100% full steering lock
     GYRO_SMOOTH = 0.25         # smoothing factor
 
-    def gyro_steer():
+    def gyro_max_deg():
+        # sensitivity 0..1 -> 40 deg (gentle) down to 12 deg (twitchy) for full steering lock
+        return 40.0 - gyro_state["sens"] * 28.0
+
+    def gyro_recenter():
+        # capture the current held tilt as the new neutral ("level") point
+        gyro_state["neutral"] = _gyro_raw()
+
+    def _gyro_raw():
         raw = 0.0
+        md = gyro_max_deg()
         if gyro_state["source"] == "web":
             try:
                 import js
                 deg = float(js.window._steer_tilt or 0.0)
-                raw = max(-1.0, min(1.0, deg / GYRO_MAX_DEG))
+                raw = max(-1.0, min(1.0, deg / md))
             except Exception:
                 raw = 0.0
         elif gyro_state["source"] == "joystick_sensor":
@@ -691,15 +721,24 @@ def main():
                 from plyer import accelerometer
                 val = accelerometer.acceleration
                 if val and val[0] is not None:
-                    raw = max(-1.0, min(1.0, (val[0] / 9.81) * 2.2))
+                    # accel X in m/s^2 -> tilt degrees (asin), then normalise to the lock angle
+                    import math as _m
+                    g = max(-9.81, min(9.81, val[0]))
+                    deg = _m.degrees(_m.asin(g / 9.81))
+                    raw = max(-1.0, min(1.0, deg / md))
             except Exception:
                 pass
-
-        # Allow programmatic / simulated tilt for tests and mobile companions
+        # Allow programmatic / simulated tilt for tests and mobile companions (already normalised)
         sim_tilt = getattr(sim, "MOBILE_TILT", None)
         if sim_tilt is not None:
-            raw = max(-1.0, min(1.0, sim_tilt))
+            raw = max(-1.0, min(1.0, float(sim_tilt)))
+        return raw
 
+    def gyro_steer():
+        if not gyro_state["enabled"]:
+            gyro_state["smooth_steer"] = 0.0
+            return 0.0
+        raw = max(-1.0, min(1.0, _gyro_raw() - gyro_state["neutral"]))
         if abs(raw) < GYRO_DEADZONE:
             raw = 0.0
         gyro_state["smooth_steer"] += (raw - gyro_state["smooth_steer"]) * GYRO_SMOOTH
@@ -760,7 +799,9 @@ def main():
     def menu_extras():
         # the bits of the title / pause menu that depend on the game: tag line, social icons
         links = [k for k, url in SOCIAL_LINKS if url]
-        ex = {"credit": CREDIT, "socials": links, "pad": bool(pads)}
+        # brand icons (itch.io / YouTube / Instagram / Discord) draw separately when available;
+        # fall back to the built-in vector glyphs only if the sprite sheet failed to load
+        ex = {"credit": CREDIT, "socials": () if social_buttons else links, "pad": bool(pads)}
         if player is not None and cars:
             order = sorted(cars, key=lambda c: (c.dead, -c.progress))
             pos = order.index(player) + 1 if player in order else 0
@@ -770,6 +811,25 @@ def main():
         else:
             ex["tag"] = "DRIFT · BASH · WIN"
         return ex
+
+    def draw_social_brand_icons():
+        # draw the itch.io / YouTube / Instagram / Discord sprite-sheet icons at the social slots,
+        # bobbing up on hover with a brand tooltip (mirrors ui.draw_menu's generic-icon behaviour)
+        if not social_buttons:
+            return
+        rects = ui.social_layout(len(social_buttons), sim.W, sim.H)
+        hover = None
+        for btn, r in zip(social_buttons, rects):
+            hot = r.collidepoint(mouse_pos)
+            img = btn["hover"] if hot else btn["idle"]
+            if img is not None:
+                screen.blit(img, img.get_rect(center=(r.centerx, r.centery - (2 if hot else 0))))
+            if hot:
+                hover = (btn["tooltip"], r)
+        if hover:
+            lbl, r = hover
+            t = font_credits.render(lbl, True, (240, 248, 255))
+            screen.blit(t, t.get_rect(midbottom=(min(sim.W - 8, r.centerx), r.y - 4)))
 
     def results_buttons():
         return ["MENU"] if race_was_online else ["RACE AGAIN", "MENU"]
@@ -859,10 +919,7 @@ def main():
     keybinds.update({k: int(v) for k, v in profile.get("keys", {}).items() if k in DEFAULT_KEYS})
     apply_profile_to_sim(profile)
     sim.start_music()
-    fullscreen = bool(profile.get("fullscreen", False))
     show_fps = bool(profile.get("show_fps", False))
-    if fullscreen:
-        screen = apply_display(True)
 
     state = "menu"
     menu_sel = mode_sel = gamemode_sel = 0  # highlighted menu row for controller / keyboard nav
@@ -932,8 +989,8 @@ def main():
     plus_btn = Button((sim.W / 2 + 60, 198, 40, 40), "+")      # right of the number, symmetric
     create_btn = Button((sim.W / 2 - 100, 256, 200, 42), "Create Lobby")
     confirm_join_btn = Button((sim.W / 2 - 100, 256, 200, 42), "Join")
-    ready_btn = Button((sim.W / 2 - 150, 290, 140, 36), "Ready")
-    leave_btn = Button((sim.W / 2 + 10, 290, 140, 36), "Leave")
+    ready_btn = Button((sim.W / 2 - 150, 344, 140, 36), "Ready")   # below the host-rules panel
+    leave_btn = Button((sim.W / 2 + 10, 344, 140, 36), "Leave")
     host_track_btn = Button((316, 96, 264, 22), "")
     host_rot_btn   = Button((316, 120, 264, 22), "")
     host_laps_btn  = Button((316, 144, 264, 22), "")
@@ -967,6 +1024,7 @@ def main():
         {"label": "Steer Rate",   "get": sim.steer_rate_frac,       "set": sim.set_steer_rate,    "key": "steer_rate",     "val_label": lambda: f"{round(0.5 + sim.steer_rate_frac() * 1.5, 2):.1f}x"},
         {"label": "Steer Curve",  "get": lambda: (sim.STEER_CURVE - 1.0) / 1.5, "set": lambda v: setattr(sim, "STEER_CURVE", round(1.0 + v * 1.5, 2)), "key": "steer_curve", "val_label": lambda: f"{sim.STEER_CURVE:.1f}"},
         {"label": "Deadzone",     "get": lambda: sim.STICK_DEADZONE / 0.25, "set": lambda v: setattr(sim, "STICK_DEADZONE", round(v * 0.25, 3)), "key": "stick_deadzone", "val_label": lambda: f"{int(round(sim.STICK_DEADZONE * 100))}%"},
+        {"label": "Gyro Sens",    "get": lambda: gyro_state["sens"], "set": lambda v: gyro_state.__setitem__("sens", round(v, 3)), "key": "gyro_sens", "val_label": lambda: f"{int(round(gyro_state['sens'] * 100))}%"},
         {"label": "Drift Assist", "get": sim.drift_assist_frac,     "set": sim.set_drift_assist,  "key": "drift_assist",   "val_label": lambda: f"{round(sim.drift_assist_frac(), 2):.1f}"},
         {"label": "Ghost Opacity","get": lambda: sim.GHOST_OPACITY, "set": lambda v: setattr(sim, "GHOST_OPACITY", round(v, 2)), "key": "ghost_opacity", "val_label": lambda: f"{int(round(sim.GHOST_OPACITY * 100))}%"},
         {"label": "Camera Zoom",  "get": sim.zoom_frac,             "set": sim.set_zoom,          "key": "zoom",           "val_label": lambda: f"{round(0.6 + sim.zoom_frac() * 1.0, 2):.1f}x"},
@@ -1067,13 +1125,23 @@ def main():
         profile["mouse_aim"] = mouse_aim
         save_profile(profile)
 
+    def ch_gyro(d):
+        gyro_state["enabled"] = not gyro_state["enabled"]
+        profile["gyro_steer"] = gyro_state["enabled"]
+        save_profile(profile)
+
+    def ch_gyro_recenter(d):
+        gyro_recenter()
+
     SHADER_DESCRIPTIONS = {
         "NONE": "Clean raw pixels without shaders",
         "CRT": "Arcade monitor scanlines + phosphor curvature",
         "CYBERPUNK": "Vibrant neon blues and bloom flares",
         "NOIR": "High-contrast monochrome with red color isolation",
-        "CINEMATIC": "Atmospheric mist and soft vignette corners",
-        "SUNSET": "Golden warm haze and sunset gradient",
+        "CINEMATIC": "Teal-orange grade, mist, vignette and film grain",
+        "SUNSET": "Golden-hour wash with warm haze and grain",
+        "ACTION": "Punchy warm high-contrast with heavy vignette and grain",
+        "VHS": "Washed cool tape look with scanlines and grain",
     }
 
     def cycle_shader_option(idx, delta):
@@ -1179,6 +1247,11 @@ def main():
                  "help": "Arcade Classic, Trigger Drive, or Southpaw preset."},
                 {"kind": "toggle", "label": "Mouse Aim", "get": lambda: mouse_aim, "change": ch_mouse_aim,
                  "help": "Aim items with cursor within 170° arc (L-Click fire, R-Click hazard)."},
+                {"kind": "toggle", "label": "Gyro Steering", "get": lambda: gyro_state["enabled"], "change": ch_gyro,
+                 "help": "Tilt a phone/tablet left-right to steer (mobile and web builds)."},
+                SL("gyro_sens", "Tilt sensitivity: higher needs less tilt for a full turn."),
+                {"kind": "cycle", "label": "Recenter Gyro", "get": lambda: "hold level · tap", "change": ch_gyro_recenter,
+                 "help": "Sets the phone's current tilt as straight-ahead."},
             ] + [{"kind": "bind", "id": ak, "label": albl, "help": "Press Enter or Click to rebind key."}
                  for ak, albl in KEY_ACTIONS]
         for i, r in enumerate(rows):
@@ -1665,6 +1738,9 @@ def main():
                 running = False
             elif event.type == sim.MUSIC_END:
                 sim.next_track()
+            elif event.type == pygame.KEYDOWN and event.key == pygame.K_F11 and awaiting_key is None:
+                toggle_fullscreen()
+                continue
             elif event.type == pygame.KEYDOWN:
                 if state == "settings" and awaiting_key is not None:
                     if event.key != pygame.K_ESCAPE:    # Esc cancels the rebind
@@ -1881,149 +1957,149 @@ def main():
                             elif name == "quit":
                                 running = False
                             break
-                elif state == "name_entry":
-                    if start_btn.clicked(mouse_pos):
-                        confirm_name()
-                    elif back_btn.clicked(mouse_pos):
-                        state = "mode"
-                    elif flag_prev.clicked(mouse_pos) and sim.FLAG_CODES:
-                        flag_idx = (flag_idx - 1) % len(sim.FLAG_CODES)
-                    elif flag_next.clicked(mouse_pos) and sim.FLAG_CODES:
-                        flag_idx = (flag_idx + 1) % len(sim.FLAG_CODES)
-                elif state == "mode":
-                    for nm, btn in mode_buttons:
-                        if not btn.clicked(mouse_pos):
-                            continue
-                        if nm == "single":
-                            state = "gamemode"
-                        elif nm == "multi":
-                            name_next = "mp"
-                            state = "name_entry"
-                        elif nm == "back":
-                            state = "menu"
-                        break
-                elif state == "gamemode":
-                    hit_mode = False
-                    for mk, btn in gamemode_buttons:
-                        if btn.clicked(mouse_pos):
-                            game_mode, name_next, state = mk, "single", "name_entry"
-                            hit_mode = True
-                            break
-                    if not hit_mode and back_btn.clicked(mouse_pos):
-                        state = "mode"
-                elif state == "mp_menu":
-                    if host_btn.clicked(mouse_pos):
-                        mp_tab = "host"
-                    elif join_btn.clicked(mouse_pos):
-                        mp_tab = "join"
-                    elif back_btn.clicked(mouse_pos):
-                        if netc is not None and lobby is None:
-                            net_disconnect()
-                        else:
+                    elif state == "name_entry":
+                        if start_btn.clicked(mouse_pos):
+                            confirm_name()
+                        elif back_btn.clicked(mouse_pos):
                             state = "mode"
-                    elif mp_tab == "host" and minus_btn.clicked(mouse_pos):
-                        mp_max = max(2, mp_max - 1)
-                    elif mp_tab == "host" and plus_btn.clicked(mouse_pos):
-                        mp_max = min(12, mp_max + 1)
-                    elif mp_tab == "host" and create_btn.clicked(mouse_pos):
-                        host_create()
-                    elif mp_tab == "join" and confirm_join_btn.clicked(mouse_pos):
-                        join_create()
-                elif state == "lobby":
-                    if ready_btn.clicked(mouse_pos):
-                        toggle_ready()
-                    elif leave_btn.clicked(mouse_pos):
-                        net_disconnect()
-                        state = "mp_menu"
-                    elif lobby and lobby.get("host") == lobby.get("self"):
-                        if host_track_btn.clicked(mouse_pos):
-                            topts = list(sim.TILESETS) + ["random"]
-                            cur = lobby_settings.get("track", "meadow_dirt")
-                            idx = topts.index(cur) if cur in topts else 0
-                            lobby_settings["track"] = topts[(idx + 1) % len(topts)]
-                        elif host_rot_btn.clicked(mouse_pos):
-                            ropts = ["Host Choice", "Player Vote", "Random Circuit", "5-World Cup"]
-                            cur = lobby_settings.get("rotation", "Host Choice")
-                            idx = ropts.index(cur) if cur in ropts else 0
-                            lobby_settings["rotation"] = ropts[(idx + 1) % len(ropts)]
-                        elif host_laps_btn.clicked(mouse_pos):
-                            lopts = [1, 3, 5, 7]
-                            cur = int(lobby_settings.get("laps", 3))
-                            idx = lopts.index(cur) if cur in lopts else 1
-                            lobby_settings["laps"] = lopts[(idx + 1) % len(lopts)]
-                        elif host_bots_btn.clicked(mouse_pos):
-                            bopts = ["Fill to 8", "Fill to 12", "No Bots"]
-                            cur = lobby_settings.get("bot_count", "Fill to 8")
-                            idx = bopts.index(cur) if cur in bopts else 0
-                            lobby_settings["bot_count"] = bopts[(idx + 1) % len(bopts)]
-                        elif host_aggr_btn.clicked(mouse_pos):
-                            levels = ["Chill", "Casual", "Feisty", "Demolition"]
-                            cur = lobby_settings.get("bot_aggression", "Casual")
-                            idx = levels.index(cur) if cur in levels else 1
-                            lobby_settings["bot_aggression"] = levels[(idx + 1) % len(levels)]
-                        elif host_coll_btn.clicked(mouse_pos):
-                            copts = ["Full Contact", "Solid (No Spun Damage)", "Ghost (Time Trial)"]
-                            cur = lobby_settings.get("collision", "Full Contact")
-                            idx = copts.index(cur) if cur in copts else 0
-                            lobby_settings["collision"] = copts[(idx + 1) % len(copts)]
-                        elif host_slip_btn.clicked(mouse_pos):
-                            lobby_settings["slipstream"] = "OFF" if lobby_settings.get("slipstream", "ON") == "ON" else "ON"
-                        elif host_items_btn.clicked(mouse_pos):
-                            iopts = ["Standard", "High Explosives / Kinetic Only", "Hazards Only", "Pure Racing (No Items)"]
-                            cur = lobby_settings.get("items", "Standard")
-                            idx = iopts.index(cur) if cur in iopts else 0
-                            lobby_settings["items"] = iopts[(idx + 1) % len(iopts)]
-                        elif host_priv_btn.clicked(mouse_pos):
-                            popts = ["Public", "Friends Only", "Invite Code Only"]
-                            cur = lobby_settings.get("privacy", "Public")
-                            idx = popts.index(cur) if cur in popts else 0
-                            lobby_settings["privacy"] = popts[(idx + 1) % len(popts)]
-                        else:
-                            for i, p in enumerate(lobby.get("players", [])):
-                                if p["id"] == lobby.get("self"):
-                                    continue
-                                kr = pygame.Rect(256, 88 + i * 28, 20, 20)
-                                br = pygame.Rect(280, 88 + i * 28, 20, 20)
-                                if kr.collidepoint(mouse_pos):
-                                    netc.send({"t": "kick", "id": p["id"]})
-                                    break
-                                if br.collidepoint(mouse_pos):
-                                    netc.send({"t": "ban", "id": p["id"]})
-                                    break
-                        if netc is not None:
-                            netc.send({"t": "settings", "settings": lobby_settings})
-                elif state == "settings":
-                    rows = settings_rows(set_tab)
-                    is_keys = SET_TABS[set_tab] == "CONTROLS"
-                    hit = ui.hit_row(mouse_pos, len(rows), is_keys)
-                    tab_hit = next((i for i, r in enumerate(ui.tab_layout(SET_TABS))
-                                    if r.collidepoint(mouse_pos)), None)
-                    if ui.BACK.collidepoint(mouse_pos):
-                        save_profile(profile)
-                        state = "menu"
-                    elif tab_hit is not None:
-                        settings_tab_to(tab_hit, sound=False)
-                    elif hit is not None:
-                        set_sel = hit
-                        row = rows[hit]
-                        if row["kind"] == "slider":
-                            if row["slider"]["track"].inflate(24, 16).collidepoint(mouse_pos):
-                                active_slider = row["slider"]
-                                tr = active_slider["track"]
-                                v = max(0.0, min(1.0, (mouse_pos[0] - tr.x) / tr.w))
-                                active_slider["set"](v)
-                                settings_change(row, 0, sound=True)
-                        elif row["kind"] == "cycle":
-                            c = ui.ctrl_rect(hit, len(rows), is_keys)
-                            settings_change(row, -1 if (c.collidepoint(mouse_pos)
-                                                        and mouse_pos[0] < c.centerx) else 1, sound=False)
-                        else:
-                            settings_activate(row)
-                elif state == "results":
-                    for i, r in enumerate(ui.results_buttons(results_buttons())):
-                        if r.collidepoint(mouse_pos):
-                            results_choose(i)
+                        elif flag_prev.clicked(mouse_pos) and sim.FLAG_CODES:
+                            flag_idx = (flag_idx - 1) % len(sim.FLAG_CODES)
+                        elif flag_next.clicked(mouse_pos) and sim.FLAG_CODES:
+                            flag_idx = (flag_idx + 1) % len(sim.FLAG_CODES)
+                    elif state == "mode":
+                        for nm, btn in mode_buttons:
+                            if not btn.clicked(mouse_pos):
+                                continue
+                            if nm == "single":
+                                state = "gamemode"
+                            elif nm == "multi":
+                                name_next = "mp"
+                                state = "name_entry"
+                            elif nm == "back":
+                                state = "menu"
                             break
+                    elif state == "gamemode":
+                        hit_mode = False
+                        for mk, btn in gamemode_buttons:
+                            if btn.clicked(mouse_pos):
+                                game_mode, name_next, state = mk, "single", "name_entry"
+                                hit_mode = True
+                                break
+                        if not hit_mode and back_btn.clicked(mouse_pos):
+                            state = "mode"
+                    elif state == "mp_menu":
+                        if host_btn.clicked(mouse_pos):
+                            mp_tab = "host"
+                        elif join_btn.clicked(mouse_pos):
+                            mp_tab = "join"
+                        elif back_btn.clicked(mouse_pos):
+                            if netc is not None and lobby is None:
+                                net_disconnect()
+                            else:
+                                state = "mode"
+                        elif mp_tab == "host" and minus_btn.clicked(mouse_pos):
+                            mp_max = max(2, mp_max - 1)
+                        elif mp_tab == "host" and plus_btn.clicked(mouse_pos):
+                            mp_max = min(12, mp_max + 1)
+                        elif mp_tab == "host" and create_btn.clicked(mouse_pos):
+                            host_create()
+                        elif mp_tab == "join" and confirm_join_btn.clicked(mouse_pos):
+                            join_create()
+                    elif state == "lobby":
+                        if ready_btn.clicked(mouse_pos):
+                            toggle_ready()
+                        elif leave_btn.clicked(mouse_pos):
+                            net_disconnect()
+                            state = "mp_menu"
+                        elif lobby and lobby.get("host") == lobby.get("self"):
+                            if host_track_btn.clicked(mouse_pos):
+                                topts = list(sim.TILESETS) + ["random"]
+                                cur = lobby_settings.get("track", "meadow_dirt")
+                                idx = topts.index(cur) if cur in topts else 0
+                                lobby_settings["track"] = topts[(idx + 1) % len(topts)]
+                            elif host_rot_btn.clicked(mouse_pos):
+                                ropts = ["Host Choice", "Player Vote", "Random Circuit", "5-World Cup"]
+                                cur = lobby_settings.get("rotation", "Host Choice")
+                                idx = ropts.index(cur) if cur in ropts else 0
+                                lobby_settings["rotation"] = ropts[(idx + 1) % len(ropts)]
+                            elif host_laps_btn.clicked(mouse_pos):
+                                lopts = [1, 3, 5, 7]
+                                cur = int(lobby_settings.get("laps", 3))
+                                idx = lopts.index(cur) if cur in lopts else 1
+                                lobby_settings["laps"] = lopts[(idx + 1) % len(lopts)]
+                            elif host_bots_btn.clicked(mouse_pos):
+                                bopts = ["Fill to 8", "Fill to 12", "No Bots"]
+                                cur = lobby_settings.get("bot_count", "Fill to 8")
+                                idx = bopts.index(cur) if cur in bopts else 0
+                                lobby_settings["bot_count"] = bopts[(idx + 1) % len(bopts)]
+                            elif host_aggr_btn.clicked(mouse_pos):
+                                levels = ["Chill", "Casual", "Feisty", "Demolition"]
+                                cur = lobby_settings.get("bot_aggression", "Casual")
+                                idx = levels.index(cur) if cur in levels else 1
+                                lobby_settings["bot_aggression"] = levels[(idx + 1) % len(levels)]
+                            elif host_coll_btn.clicked(mouse_pos):
+                                copts = ["Full Contact", "Solid (No Spun Damage)", "Ghost (Time Trial)"]
+                                cur = lobby_settings.get("collision", "Full Contact")
+                                idx = copts.index(cur) if cur in copts else 0
+                                lobby_settings["collision"] = copts[(idx + 1) % len(copts)]
+                            elif host_slip_btn.clicked(mouse_pos):
+                                lobby_settings["slipstream"] = "OFF" if lobby_settings.get("slipstream", "ON") == "ON" else "ON"
+                            elif host_items_btn.clicked(mouse_pos):
+                                iopts = ["Standard", "High Explosives / Kinetic Only", "Hazards Only", "Pure Racing (No Items)"]
+                                cur = lobby_settings.get("items", "Standard")
+                                idx = iopts.index(cur) if cur in iopts else 0
+                                lobby_settings["items"] = iopts[(idx + 1) % len(iopts)]
+                            elif host_priv_btn.clicked(mouse_pos):
+                                popts = ["Public", "Friends Only", "Invite Code Only"]
+                                cur = lobby_settings.get("privacy", "Public")
+                                idx = popts.index(cur) if cur in popts else 0
+                                lobby_settings["privacy"] = popts[(idx + 1) % len(popts)]
+                            else:
+                                for i, p in enumerate(lobby.get("players", [])):
+                                    if p["id"] == lobby.get("self"):
+                                        continue
+                                    kr = pygame.Rect(256, 88 + i * 28, 20, 20)
+                                    br = pygame.Rect(280, 88 + i * 28, 20, 20)
+                                    if kr.collidepoint(mouse_pos):
+                                        netc.send({"t": "kick", "id": p["id"]})
+                                        break
+                                    if br.collidepoint(mouse_pos):
+                                        netc.send({"t": "ban", "id": p["id"]})
+                                        break
+                            if netc is not None:
+                                netc.send({"t": "settings", "settings": lobby_settings})
+                    elif state == "settings":
+                        rows = settings_rows(set_tab)
+                        is_keys = SET_TABS[set_tab] == "CONTROLS"
+                        hit = ui.hit_row(mouse_pos, len(rows), is_keys)
+                        tab_hit = next((i for i, r in enumerate(ui.tab_layout(SET_TABS))
+                                        if r.collidepoint(mouse_pos)), None)
+                        if ui.BACK.collidepoint(mouse_pos):
+                            save_profile(profile)
+                            state = "menu"
+                        elif tab_hit is not None:
+                            settings_tab_to(tab_hit, sound=False)
+                        elif hit is not None:
+                            set_sel = hit
+                            row = rows[hit]
+                            if row["kind"] == "slider":
+                                if row["slider"]["track"].inflate(24, 16).collidepoint(mouse_pos):
+                                    active_slider = row["slider"]
+                                    tr = active_slider["track"]
+                                    v = max(0.0, min(1.0, (mouse_pos[0] - tr.x) / tr.w))
+                                    active_slider["set"](v)
+                                    settings_change(row, 0, sound=True)
+                            elif row["kind"] == "cycle":
+                                c = ui.ctrl_rect(hit, len(rows), is_keys)
+                                settings_change(row, -1 if (c.collidepoint(mouse_pos)
+                                                            and mouse_pos[0] < c.centerx) else 1, sound=False)
+                            else:
+                                settings_activate(row)
+                    elif state == "results":
+                        for i, r in enumerate(ui.results_buttons(results_buttons())):
+                            if r.collidepoint(mouse_pos):
+                                results_choose(i)
+                                break
             elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
                 if active_slider is not None:
                     if active_slider["key"] == "laps":
@@ -2596,6 +2672,7 @@ def main():
         elif state == "menu":
             draw_bg()
             ui.draw_menu(screen, [b_.label for _, b_ in menu_buttons], menu_sel, mouse_pos, **menu_extras())
+            draw_social_brand_icons()
 
         elif state == "name_entry":
             draw_bg()
@@ -2832,7 +2909,7 @@ def main():
                 leave_btn.draw(screen, font_small, leave_btn.clicked(mouse_pos))
                 tip = "All players ready -> race starts automatically"
                 tip_s = font_credits.render(tip, True, (180, 200, 180))
-                screen.blit(tip_s, tip_s.get_rect(center=(sim.W / 2, 350)))
+                screen.blit(tip_s, tip_s.get_rect(center=(sim.W / 2, 392)))
 
         draw_connect_overlay()
 

@@ -855,7 +855,7 @@ SKID_SLIP = 55.0        # tyre sideways slip (px/s) above which it leaves a mark
 TRAIL_LIFE = 13.0       # seconds a skid mark stays visible (remains for ~13s then fades out)
 TRAIL_MAX_POINTS = 3000
 MAX_PARTICLES = 1200
-SHAKE_PX = 6.0          # screen shake at full strength
+SHAKE_PX = 6.5          # screen shake at full strength
 SHAKE_IMPULSE = 260.0   # hit strength that gives full shake
 SHAKE_SCALE = 1.0       # player-set multiplier on shake (0 = off, up to 2x)
 SHAKE_MAX = 2.0         # slider top end
@@ -3244,6 +3244,7 @@ class Camera:
         self.override_zoom = None
         self.lead_x = 0.0
         self.lead_y = 0.0
+        self.sway_t = 0.0           # cinematic handheld-sway clock
         rad = -math.radians(self.angle + 90)
         self.cos_c, self.sin_c = math.cos(rad), math.sin(rad)
 
@@ -3266,14 +3267,16 @@ class Camera:
             self.target_zoom = self.override_zoom
         else:
             target_z = ZOOM
-            if getattr(car, "boost_time", 0.0) > 0.0 or getattr(car, "draft", 0.0) > 0.7 or speed > 225.0:
-                target_z = ZOOM * 0.91      # pull back (~1.18) for speed rush
+            if getattr(car, "boost_time", 0.0) > 0.0:
+                target_z = ZOOM * 0.85      # hard punch-out on boost for a speed rush
+            elif getattr(car, "draft", 0.0) > 0.7 or speed > 225.0:
+                target_z = ZOOM * 0.90      # ease back when drafting / flat out
             elif getattr(car, "drift", False):
-                target_z = ZOOM * 1.05      # zoom in (~1.36) on drift
+                target_z = ZOOM * 1.09      # whip in tight on drift
             elif speed < 50.0:
-                target_z = ZOOM * 1.03
+                target_z = ZOOM * 1.04
             self.target_zoom = target_z
-        z_spd = 2.5 if self.target_zoom < self.zoom else 3.5
+        z_spd = 3.2 if self.target_zoom < self.zoom else 4.2   # snappier, more cinematic dilation
         self.zoom += (self.target_zoom - self.zoom) * min(1.0, dt * z_spd)
 
         # 3. Rotational follow
@@ -3298,7 +3301,7 @@ class Camera:
                 sky = ivx * sin_c + ivy * cos_c
                 smag = math.hypot(skx, sky)
                 if smag > 0.01:
-                    kick = min(220.0, imp * 1.1)
+                    kick = min(300.0, imp * 1.45)
                     self.trauma_vx += (skx / smag) * kick
                     self.trauma_vy += (sky / smag) * kick
             else:
@@ -3306,12 +3309,12 @@ class Camera:
                 fx, fy = math.cos(c_rad), math.sin(c_rad)
                 skx = fx * cos_c - fy * sin_c
                 sky = fx * sin_c + fy * cos_c
-                self.trauma_vx += skx * min(170.0, imp)
-                self.trauma_vy += sky * min(170.0, imp)
+                self.trauma_vx += skx * min(230.0, imp)
+                self.trauma_vy += sky * min(230.0, imp)
 
         sub_dt = min(dt, 0.05)
         k_spring = 145.0
-        c_damp = 16.5
+        c_damp = 14.0       # a touch bouncier so big hits wobble longer (more cinematic)
         ax = -k_spring * self.trauma_x - c_damp * self.trauma_vx
         ay = -k_spring * self.trauma_y - c_damp * self.trauma_vy
         self.trauma_vx += ax * sub_dt
@@ -3319,15 +3322,29 @@ class Camera:
         self.trauma_x += self.trauma_vx * sub_dt
         self.trauma_y += self.trauma_vy * sub_dt
 
-        # Secondary subtle high-frequency shudder for heavy hits
+        # High-frequency shudder: hits, plus a continuous rumble from speed / grass / boost
         self.shake = min(1.0, max(0.0, self.shake - dt * 2.8) + imp / SHAKE_IMPULSE)
-        rumble = SHAKE_PX * 0.22 * self.shake * self.shake
+        speed_frac = min(1.0, speed / MAX_SPEED)
+        offroad = 0.5 * (getattr(car, "off_f", 0.0) + getattr(car, "off_r", 0.0))
+        ambient = 0.0
+        if not car.dead:
+            ambient += offroad * (0.4 + 0.6 * speed_frac)          # bouncing over the grass
+            if getattr(car, "boost_time", 0.0) > 0.0:
+                ambient += 0.55                                    # boost kick-in rumble
+            ambient += max(0.0, speed_frac - 0.72) * 1.8           # top-speed buzz
+        rumble = SHAKE_PX * (0.22 * self.shake * self.shake + 0.5 * min(1.2, ambient))
         rx = random.uniform(-rumble, rumble)
         ry = random.uniform(-rumble, rumble)
 
+        # Handheld cinematic sway: a slow lissajous drift so the frame always breathes a little
+        self.sway_t = getattr(self, "sway_t", 0.0) + dt
+        sway_amp = SHAKE_PX * 0.18 * (0.5 + 0.5 * speed_frac)
+        sx = math.sin(self.sway_t * 1.7) * sway_amp
+        sy = math.cos(self.sway_t * 1.3) * sway_amp * 0.6
+
         scale = SHAKE_SCALE
-        self.ox = (self.trauma_x + rx) * scale
-        self.oy = (self.trauma_y + ry) * scale
+        self.ox = (self.trauma_x + rx + sx) * scale
+        self.oy = (self.trauma_y + ry + sy) * scale
         rad_f = -math.radians(self.angle + 90)
         self.cos_c, self.sin_c = math.cos(rad_f), math.sin(rad_f)
 
@@ -4818,7 +4835,7 @@ def draw_cones(screen, cam):
         ramps.draw(screen, cam, "cone", c["x"], c["y"], c["angle"])
 
 # ---- shaders and post-processing ----------------------------------------------------
-SHADER_PRESETS = ["NONE", "CRT", "CYBERPUNK", "NOIR", "CINEMATIC", "SUNSET"]
+SHADER_PRESETS = ["NONE", "CRT", "CYBERPUNK", "NOIR", "CINEMATIC", "SUNSET", "ACTION", "VHS"]
 FOG_OPTIONS = ["OFF", "LOW", "MEDIUM", "HIGH"]
 CRT_OPTIONS = ["OFF", "LOW", "MED", "HIGH"]
 VIGNETTE_OPTIONS = ["OFF", "ON"]
@@ -4851,9 +4868,51 @@ def set_fog_density(v):
 
 _SHADER_SURF = None
 _FOG_SURF = None
+_GRADE_MULT = None      # full-frame colour-grade: blitted with BLEND_RGB_MULT (tints/darkens)
+_GRADE_ADD = None       # then BLEND_RGB_ADD (lifts shadows toward a hue)
+_GRAIN_FRAMES = None
+_GRAIN_I = 0
+
+# preset -> (multiply colour, add colour); None = untouched. This is what actually makes the
+# presets look different -- a real colour wash over the whole frame, not just fog + vignette.
+GRADE = {
+    "NONE":      (None, None),
+    "CRT":       ((224, 226, 236), (6, 4, 12)),
+    "CYBERPUNK": ((150, 168, 255), (30, 6, 46)),    # cold blue cast, magenta lift
+    "NOIR":      ((176, 180, 192), (8, 9, 14)),      # cool near-grey, crushed
+    "CINEMATIC": ((226, 220, 206), (10, 12, 20)),    # teal shadows, warm mids
+    "SUNSET":    ((255, 194, 146), (42, 14, 2)),     # golden-hour wash
+    "ACTION":    ((255, 236, 214), (34, 14, 4)),     # punchy warm high-contrast
+    "VHS":       ((198, 206, 216), (12, 8, 20)),     # washed cool tape look
+}
+GRAIN_PRESETS = {"CINEMATIC", "NOIR", "SUNSET", "CYBERPUNK", "ACTION", "VHS"}
+
+def _build_grain():
+    global _GRAIN_FRAMES
+    tw, th = 300, 200
+    rnd = random.Random(1234)
+    frames = []
+    for _ in range(4):
+        t = pygame.Surface((tw, th), pygame.SRCALPHA)
+        for _ in range((tw * th) // 6):
+            v = rnd.randint(0, 255)
+            t.set_at((rnd.randrange(tw), rnd.randrange(th)), (v, v, v, rnd.randint(0, 20)))
+        frames.append(pygame.transform.scale(t, (W, H)))   # blocky upscale = film-ish grain
+    _GRAIN_FRAMES = frames
 
 def _rebuild_shader_surface():
-    global _SHADER_SURF, _FOG_SURF
+    global _SHADER_SURF, _FOG_SURF, _GRADE_MULT, _GRADE_ADD
+    # colour grade applies regardless of fog/crt/vignette, so build it first
+    gm, ga = GRADE.get(SHADER_SETTINGS.get("preset", "NONE"), (None, None))
+    if gm is not None and gm != (255, 255, 255):
+        _GRADE_MULT = pygame.Surface((W, H)); _GRADE_MULT.fill(gm)
+    else:
+        _GRADE_MULT = None
+    if ga is not None and any(ga):
+        _GRADE_ADD = pygame.Surface((W, H)); _GRADE_ADD.fill(ga)
+    else:
+        _GRADE_ADD = None
+
     fog_on = FOG_DENSITY > 0.02
     crt_level = SHADER_SETTINGS.get("crt", "OFF")
     vig_level = SHADER_SETTINGS.get("vignette", "ON")
@@ -4946,6 +5005,18 @@ def apply_shader_preset(preset):
         SHADER_SETTINGS["crt"] = "OFF"
         SHADER_SETTINGS["vignette"] = "ON"
         SHADER_SETTINGS["shadows"] = "ON"
+    elif preset == "ACTION":
+        SHADER_SETTINGS["preset"] = "ACTION"
+        SHADER_SETTINGS["fog"] = "OFF"
+        SHADER_SETTINGS["crt"] = "OFF"
+        SHADER_SETTINGS["vignette"] = "ON"
+        SHADER_SETTINGS["shadows"] = "ON"
+    elif preset == "VHS":
+        SHADER_SETTINGS["preset"] = "VHS"
+        SHADER_SETTINGS["fog"] = "LOW"
+        SHADER_SETTINGS["crt"] = "MED"
+        SHADER_SETTINGS["vignette"] = "ON"
+        SHADER_SETTINGS["shadows"] = "ON"
     _sync_fog_density_from_level()
     _rebuild_shader_surface()
 
@@ -4964,6 +5035,10 @@ def update_shader_preset_label():
             test = {"fog": "MEDIUM", "crt": "OFF", "vignette": "ON", "shadows": "ON"}
         elif p == "SUNSET":
             test = {"fog": "MEDIUM", "crt": "OFF", "vignette": "ON", "shadows": "ON"}
+        elif p == "ACTION":
+            test = {"fog": "OFF", "crt": "OFF", "vignette": "ON", "shadows": "ON"}
+        elif p == "VHS":
+            test = {"fog": "LOW", "crt": "MED", "vignette": "ON", "shadows": "ON"}
         if test and all(SHADER_SETTINGS.get(k) == v for k, v in test.items()):
             SHADER_SETTINGS["preset"] = p
             return
@@ -4996,11 +5071,24 @@ def set_shader_settings(d):
     _rebuild_shader_surface()
 
 def draw_shaders(screen):
-    global _SHADER_SURF
-    if _SHADER_SURF is None and any(SHADER_SETTINGS.get(k) != "OFF" for k in ("fog", "crt", "vignette")):
+    global _SHADER_SURF, _GRAIN_I
+    preset = SHADER_SETTINGS.get("preset", "NONE")
+    wants = (preset in GRADE and GRADE[preset] != (None, None)) or \
+        any(SHADER_SETTINGS.get(k) != "OFF" for k in ("fog", "crt", "vignette"))
+    if _SHADER_SURF is None and _GRADE_MULT is None and wants:
         _rebuild_shader_surface()
+    # 1. colour grade the whole frame, 2. lay fog/vignette/scanlines on top, 3. film grain
+    if _GRADE_MULT is not None:
+        screen.blit(_GRADE_MULT, (0, 0), special_flags=pygame.BLEND_RGB_MULT)
+    if _GRADE_ADD is not None:
+        screen.blit(_GRADE_ADD, (0, 0), special_flags=pygame.BLEND_RGB_ADD)
     if _SHADER_SURF is not None:
         screen.blit(_SHADER_SURF, (0, 0))
+    if preset in GRAIN_PRESETS:
+        if _GRAIN_FRAMES is None:
+            _build_grain()
+        _GRAIN_I = (_GRAIN_I + 1) % len(_GRAIN_FRAMES)
+        screen.blit(_GRAIN_FRAMES[_GRAIN_I], (0, 0))
 
 def draw_fog(screen):
     draw_shaders(screen)
