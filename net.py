@@ -18,7 +18,24 @@ from urllib.parse import urlparse
 
 import websockets
 
-DEFAULT_URL = os.environ.get("STEER_SERVER_URL", "ws://localhost:8765")
+
+def _default_url():
+    # 1. STEER_SERVER_URL env wins (dev / CI). 2. a `server_url.txt` next to the game lets a
+    # shipped build point at a deployment without rebuilding or setting env vars. 3. localhost.
+    env = os.environ.get("STEER_SERVER_URL")
+    if env:
+        return env.strip()
+    try:
+        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "server_url.txt")) as f:
+            url = f.read().strip()
+            if url and not url.startswith("#"):
+                return url
+    except OSError:
+        pass
+    return "ws://localhost:8765"
+
+
+DEFAULT_URL = _default_url()
 
 
 def prewarm(url=None):

@@ -1,30 +1,40 @@
 # Render Blueprint for the Steer multiplayer server.
-# Push this repo to GitHub, then on Render: New -> Blueprint -> pick this repo -> Apply.
-# Render injects $PORT; server.py binds 0.0.0.0:$PORT and speaks WebSocket (wss://).
-# The public URL it gives you (wss://steer-server.onrender.com) is what clients set as
-# STEER_SERVER_URL.
 #
-# Redis is OPTIONAL. One web instance comfortably handles 7-10 lobbies in memory. The Key
-# Value (Redis) service + REDIS_URL below lets you run MULTIPLE web instances that share
-# lobbies (set the web service's instance count > 1 in the dashboard to scale out).
+# Deploy:  push this repo to GitHub -> Render dashboard -> New -> Blueprint -> pick this repo
+#          -> Apply. Render builds, injects $PORT, and server.py binds 0.0.0.0:$PORT speaking
+#          WebSocket. It hands you a public URL like https://steer-server.onrender.com; the
+#          clients connect to the wss:// form (wss://steer-server.onrender.com).
+#
+# Point the game at it with either:
+#   * the STEER_SERVER_URL env var, or
+#   * a `server_url.txt` next to the game containing `wss://<your-service>.onrender.com`.
+#
+# Free plan sleeps after ~15 min idle and cold-starts in ~30s; the game's loading screen and
+# launch-time prewarm ping hide that. One web instance comfortably handles several lobbies in
+# memory -- Redis is only needed to share lobbies across MULTIPLE instances (see the bottom).
 services:
   - type: web
     name: steer-server
     runtime: python
     plan: free
-    buildCommand: pip install "websockets>=14" "redis>=5"
+    buildCommand: pip install "websockets>=14"
     startCommand: python server.py
     healthCheckPath: /
-    envVars:
-      - key: REDIS_URL
-        fromService:
-          type: keyvalue
-          name: steer-kv
-          property: connectionString
 
-  # Render's managed Redis (now called "Key Value"). If your account still exposes the older
-  # `type: redis`, rename this block's type to `redis` and keep the same name/property.
-  - type: keyvalue
-    name: steer-kv
-    plan: free
-    ipAllowList: []     # only reachable from your Render services
+# ---------------------------------------------------------------------------------------------
+# OPTIONAL horizontal scaling: uncomment the Key Value store + the REDIS_URL env + buildCommand
+# redis dep, then raise the web service's instance count in the dashboard. Lobbies are shared
+# across instances over the Redis bus.
+#
+#    buildCommand: pip install "websockets>=14" "redis>=5"
+#    envVars:
+#      - key: REDIS_URL
+#        fromService:
+#          type: keyvalue
+#          name: steer-kv
+#          property: connectionString
+#
+#  - type: keyvalue
+#    name: steer-kv
+#    plan: free
+#    ipAllowList: []     # only reachable from your Render services

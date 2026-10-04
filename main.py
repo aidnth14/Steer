@@ -25,6 +25,18 @@ SOCIAL_LINKS = [
     ("chat", "https://discord.com/users/1125415771737182310"),
 ]
 
+# Shown on the connect/cold-start loading screen to keep the ~30s free-tier wake entertaining.
+LOADING_TIPS = [
+    "Hold DRIFT through corners to carry speed out of the apex.",
+    "Tuck in behind a rival to slipstream, then slingshot past.",
+    "Bash left or right to knock rivals off the racing line.",
+    "Grab mystery boxes for boosts, oil slicks and homing items.",
+    "Drop a hazard behind you to trip up whoever's chasing.",
+    "The free server naps when idle — first connect wakes it up.",
+    "Tilt-to-steer? Enable Gyro Steering on your phone in Settings.",
+    "Press F11 any time to go fullscreen.",
+]
+
 # gamepad: SDL's game-controller layer maps Xbox / PlayStation / Nintendo pads to one
 # standard layout (A = bottom face button, LB/RB = shoulders, etc.), so one mapping works
 # for all three. Buttons/axes are the pygame CONTROLLER_* constants.
@@ -886,22 +898,54 @@ def main():
             player = None
             state = "menu"
 
+    # cold-start loading screen: Render's free plan sleeps when idle and takes ~30s to wake,
+    # so while we're mid-connect we take over the whole screen with an estimated progress bar
+    # and rotating tips -- it reads as an intentional "loading" rather than a frozen menu.
+    COLD_START_EST = 32.0           # seconds we pace the bar over before holding near full
+
     def draw_connect_overlay():
-        # full-screen takeover while we're mid-connect, so a slow/cold-starting server reads
-        # as "loading" rather than a frozen or broken menu
         if netc is None or lobby is not None:
             return
-        screen.blit(_dim, (0, 0))
-        cx, cy = sim.W / 2, sim.H / 2 - 10
-        ang = (pygame.time.get_ticks() / 1000.0) * 4.0
-        r = 22
-        pygame.draw.arc(screen, UI_ACCENT, pygame.Rect(cx - r, cy - r, r * 2, r * 2), ang, ang + 4.0, 5)
+        # solid backdrop so the menu behind never bleeds through the loader
+        screen.fill((12, 14, 22))
+        cx = sim.W / 2
+        t = pygame.time.get_ticks() / 1000.0
+        elapsed = netc.connect_elapsed()
         waking = netc.waking()
-        title = font.render("Waking the server..." if waking else "Connecting...", True, (255, 255, 255))
-        screen.blit(title, title.get_rect(center=(cx, cy + 62)))
-        if waking:
-            sub = font_small.render("First connect after idle can take up to ~30s", True, (200, 210, 195))
-            screen.blit(sub, sub.get_rect(center=(cx, cy + 94)))
+
+        logo_drawn = False
+        if logo is not None:
+            screen.blit(logo, logo.get_rect(center=(cx, 92)))
+            logo_drawn = True
+        if not logo_drawn:
+            screen.blit(sim.get_font(48).render("STEER", True, (255, 255, 255)),
+                        sim.get_font(48).render("STEER", True, (255, 255, 255)).get_rect(center=(cx, 92)))
+
+        title_txt = "WAKING THE SERVER" if waking else "CONNECTING"
+        title = font.render(title_txt, True, (255, 255, 255))
+        screen.blit(title, title.get_rect(center=(cx, 168)))
+
+        # progress bar: ease toward ~95% across the estimated cold-start window, finish on connect
+        bw, bh, by = 320, 16, 206
+        bx = cx - bw / 2
+        frac = min(0.95, elapsed / COLD_START_EST) if elapsed > 0 else 0.0
+        pygame.draw.rect(screen, (30, 34, 46), (bx, by, bw, bh), border_radius=8)
+        fillw = max(bh, int(bw * frac))
+        pygame.draw.rect(screen, UI_ACCENT, (bx, by, fillw, bh), border_radius=8)
+        # moving sheen on the fill so it never looks stalled
+        sheen_x = bx + (t * 120 % max(1, fillw))
+        pygame.draw.rect(screen, (255, 255, 255), (sheen_x, by + 2, 10, bh - 4), border_radius=4)
+        pygame.draw.rect(screen, (70, 82, 104), (bx, by, bw, bh), 1, border_radius=8)
+
+        sub = font_small.render("First connect after idle can take up to ~30s", True, (200, 210, 195))
+        screen.blit(sub, sub.get_rect(center=(cx, by + 40)))
+
+        # rotating tip, swapping every ~3.5s
+        if LOADING_TIPS:
+            tip = LOADING_TIPS[int(t / 3.5) % len(LOADING_TIPS)]
+            tip_s = font_small.render("TIP: " + tip, True, (150, 180, 160))
+            screen.blit(tip_s, tip_s.get_rect(center=(cx, 300)))
+
         esc_icon = buttonmanager.get_key_icon('esc')
         if esc_icon:
             txt_cancel = font_small.render("to cancel", True, (160, 170, 155))
