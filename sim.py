@@ -933,7 +933,7 @@ def _make_cone_stroked(cone_surf):
 
 def load_track_tileset(tileset_name="meadow_dirt"):
     global CURRENT_TILESET, TRACK_TILE_DIR, TILES, INNER, GRASS_COLOR, DIRT_COLOR
-    global CHECK, CHECK_TILES, OIL_RAW, OIL_TILES, SKID_ROAD_COLOR
+    global CHECK, CHECK_TILES, OIL_RAW, OIL_TILES, SKID_ROAD_COLOR, ROAD_WIDTH
     if tileset_name not in TILESETS and tileset_name != "random":
         tileset_name = "meadow_dirt"
     if tileset_name == "random":
@@ -943,8 +943,10 @@ def load_track_tileset(tileset_name="meadow_dirt"):
     TRACK_TILE_DIR = get_tileset_dir(tileset_name)
     if CURRENT_TILESET == "asphalt_circuit":
         SKID_ROAD_COLOR = (16, 18, 28)
+        ROAD_WIDTH = 288    # 18 tiles (at least 7 tiles, wider for grand prix circuit)
     else:
         SKID_ROAD_COLOR = (46, 28, 22)
+        ROAD_WIDTH = 240    # 15 tiles (meadow dirt)
 
     grid = [[None] * 3 for _ in range(3)]
     for key, fn in (("center", "checktile"), ("left", "checktile1"), ("right", "checktile2"),
@@ -1365,8 +1367,12 @@ def generate_road(seed):
     rnd = random.Random(seed)
     shape_idx = rnd.randrange(len(TRACK_SHAPES))
     cx, cy = WORLD / 2, WORLD / 2
-    A = rnd.uniform(560, 720)
-    R = rnd.uniform(430, 520)
+    if CURRENT_TILESET == "asphalt_circuit":
+        A = rnd.uniform(690, 850)   # ~22% larger straight/extent
+        R = rnd.uniform(500, 610)   # ~20% larger turn sweep radius
+    else:
+        A = rnd.uniform(560, 720)
+        R = rnd.uniform(430, 520)
     n_straight, n_arc = 80, 60
     pts = []
 
@@ -1758,44 +1764,27 @@ def _bake_finish(surf, ox, oy):
     wx, wy, heading = road_pose(s0)
 
     tc = CHECK_TILES.get("center")
-    t_left = CHECK_TILES.get("left") or tc
-    t_right = CHECK_TILES.get("right") or tc
-    t_top = CHECK_TILES.get("top") or tc
-    t_bot = CHECK_TILES.get("bottom") or tc
-
     rad = math.radians(heading)
     cos_h, sin_h = math.cos(rad), math.sin(rad)
 
-    # 15 tiles across (240px road width), 2 tiles deep (32px along track)
+    # Dynamically match full ROAD_WIDTH (288 on asphalt, 240 on dirt) without green grass artifacts
+    road_w = ROAD_WIDTH
+    num_tiles_across = int(round(road_w / 16))
+    total_w = num_tiles_across * 16
+
     if abs(sin_h) < 0.707:
         # Road is mostly horizontal (East or West)
-        band = pygame.Surface((32, 240), pygame.SRCALPHA)
-        top_tile = t_top if cos_h >= 0 else t_bot
-        bot_tile = t_bot if cos_h >= 0 else t_top
-        for row in range(15):
+        band = pygame.Surface((32, total_w), pygame.SRCALPHA)
+        for row in range(num_tiles_across):
             for col in range(2):
-                if row == 0:
-                    t = top_tile
-                elif row == 14:
-                    t = bot_tile
-                else:
-                    t = tc
-                band.blit(t, (col * 16, row * 16))
+                band.blit(tc, (col * 16, row * 16))
         rot_angle = -heading if abs(heading) > 0.01 else 0
     else:
         # Road is mostly vertical (South or North)
-        band = pygame.Surface((240, 32), pygame.SRCALPHA)
-        left_tile = t_left if sin_h >= 0 else t_right
-        right_tile = t_right if sin_h >= 0 else t_left
-        for col in range(15):
+        band = pygame.Surface((total_w, 32), pygame.SRCALPHA)
+        for col in range(num_tiles_across):
             for row in range(2):
-                if col == 0:
-                    t = left_tile
-                elif col == 14:
-                    t = right_tile
-                else:
-                    t = tc
-                band.blit(t, (col * 16, row * 16))
+                band.blit(tc, (col * 16, row * 16))
         base_h = 90 if sin_h >= 0 else -90
         rot_angle = -(heading - base_h)
         if abs(rot_angle) < 0.01:
@@ -2150,7 +2139,6 @@ def new_map(seed, tileset=None):
     generate_fences()
     build_ground()
     _build_minimap()
-    spawn_boxes()
     del BOX_EVENTS[:]   # pickups from a previous map (e.g. the menu backdrop) must never be broadcast
     del PARTICLES[:]
     del DEBRIS[:]
@@ -2161,12 +2149,15 @@ def new_map(seed, tileset=None):
     del OIL[:]
     del CONES[:]
     del DESTRUCTIBLES[:]
-    rng_oil = random.Random(seed + 888)
-    drop_oil(rng_oil.randint(4, 7), rng=rng_oil)
-    spawn_traffic_cones(random.Random(seed + 999))
-    spawn_destructibles(random.Random(seed + 777))
+    del TIRES[:]
+    del RAMPS[:]
+    spawn_boxes()
     spawn_test_ramps()
     spawn_test_tires(random.Random(seed + 222))
+    spawn_traffic_cones(random.Random(seed + 999))
+    spawn_destructibles(random.Random(seed + 777))
+    rng_oil = random.Random(seed + 888)
+    drop_oil(rng_oil.randint(3, 5), rng=rng_oil)
 
 
 # =================================================================================================
@@ -2237,6 +2228,9 @@ class Car:
         self.impact_vy = 0.0        # world-space impulse Y of hardest hit
         self.draft = 0.0            # 0..1 slipstream strength, tucked in behind another kart
         self.airtime = 0.0          # > 0 while airborne off a ramp: off-road/oil can't touch you
+        self.tire_bounce_grace = 0.0 # > 0 after colliding with rubber tire barrier: immune to damage/death
+        self.wrong_way = False      # True when heading in reverse / opposite direction of the track
+        self.wrong_way_time = 0.0   # seconds driving opposite way (triggers active deceleration and auto-turn)
         self.last_hit_by = 0
         # getting unstuck
         self.slow_time = 0.0
@@ -2294,11 +2288,19 @@ class Car:
         play_at("ram" if kind == "ram" else "bash", self.x, self.y)
         return True
 
-    def start_shoot(self):
-        # fire a projectile straight ahead from the nose
+    def start_shoot(self, aim_angle=None):
+        # fire a projectile straight ahead from the nose or aimed forward in front hemisphere
         if self.proj_cd > 0 or self.reverse_time > 0 or self.dead:
             return False
-        rad = math.radians(self.angle)
+        if aim_angle is not None:
+            # "u can only shoot infront not back"
+            diff = (aim_angle - self.angle + 180) % 360 - 180
+            if abs(diff) > 85.0:
+                return False
+            fire_angle = aim_angle
+        else:
+            fire_angle = self.angle
+        rad = math.radians(fire_angle)
         c, s = math.cos(rad), math.sin(rad)
         spawn_projectile(self.x + c * CAR_HL, self.y + s * CAR_HL,
                          c * PROJ_SPEED + self.vx, s * PROJ_SPEED + self.vy, self.uid)
@@ -2309,14 +2311,8 @@ class Car:
     def use_sabotage(self, action_name, backward=False):
         if self.dead or self.reverse_time > 0:
             return False
-        if action_name in ("cone", "throw_cone"):
-            if self.item == "cone":
-                self.item = None
-                return throw_traffic_cone(self, forward=True)
-            elif self.sabotage_cd <= 0:
-                self.sabotage_cd = 1.6
-                return throw_traffic_cone(self, forward=True)
-        elif action_name == "drop_cone":
+        # When sabotaging with cone or oil, always spawn BEHIND the player, not in front
+        if action_name in ("cone", "throw_cone", "drop_cone"):
             if self.item == "cone":
                 self.item = None
                 return throw_traffic_cone(self, forward=False)
@@ -2344,7 +2340,7 @@ class Car:
                 return throw_traffic_cone(self, forward=False)
         elif action_name in ("item", "shoot"):
             if self.item == "cone":
-                res = throw_traffic_cone(self, forward=not backward)
+                res = throw_traffic_cone(self, forward=False)
                 self.item = None
                 return res
             elif self.item == "oil":
@@ -2451,9 +2447,10 @@ class Car:
             self.grudge = 0
 
         # lose half a heart the moment you leave the road (edge-triggered + a cooldown)
-        on_road = offroad_factor(self.x, self.y) <= 0.0 or self.airtime > 0.0
+        self.tire_bounce_grace = max(0.0, getattr(self, "tire_bounce_grace", 0.0) - dt)
+        on_road = offroad_factor(self.x, self.y) <= 0.0 or self.airtime > 0.0 or self.tire_bounce_grace > 0.0
         self.heart_cooldown = max(0.0, self.heart_cooldown - dt)
-        if self.was_on_road and not on_road and self.heart_cooldown <= 0.0:
+        if self.was_on_road and not on_road and self.heart_cooldown <= 0.0 and self.tire_bounce_grace <= 0.0:
             self.hearts = max(0.0, self.hearts - HEART_PENALTY)
             self.heart_cooldown = HEART_COOLDOWN
             if getattr(self, "is_player", True) and not getattr(self, "is_remote", False):
@@ -2467,6 +2464,49 @@ class Car:
             spawn_particles(self.x, self.y, 20, 150, (90, 90, 95), 0.8)
             spawn_fx(self.x, self.y - 10, "poof_dark", random.uniform(34, 42), dur=0.5)
         self.was_on_road = on_road
+
+        # Wrong-way prevention: detect if human player is pointed or travelling backwards along the track
+        if ROAD_T and not self.dead and self.airtime <= 0.0 and self.reverse_time <= 0 and not getattr(self, "is_bot", False):
+            s_coord, lat_coord, tidx = track_coords(self.x, self.y, self.track_idx)
+            tx, ty = ROAD_T[tidx]
+            track_deg = math.degrees(math.atan2(ty, tx))
+            ang_diff = (self.angle - track_deg + 180) % 360 - 180
+            v_forward = self.vx * tx + self.vy * ty
+
+            # Heading facing backwards (> 100 deg off track direction)
+            is_wrong = (abs(ang_diff) > 100.0) and (v_forward < -30.0 or getattr(self, "throttle", 0.0) > 0.1)
+            if is_wrong:
+                self.wrong_way = True
+                self.wrong_way_time = getattr(self, "wrong_way_time", 0.0) + dt
+                # Strongly decelerate / brake backwards motion to prevent griefing
+                brake_factor = max(0.15, 1.0 - 5.0 * dt)
+                self.vx *= brake_factor
+                self.vy *= brake_factor
+                # Smoothly auto-steer / reorient the car back to the correct track heading if sustained
+                if self.wrong_way_time > 0.6:
+                    turn_dir = 1.0 if ang_diff < 0 else -1.0
+                    reorient_rate = min(abs(ang_diff), 360.0 * dt)
+                    self.angle = (self.angle + turn_dir * reorient_rate) % 360.0
+                    self.omega *= 0.5
+                    # Give a gentle nudge forward in the proper track direction
+                    self.vx += tx * 140.0 * dt
+                    self.vy += ty * 140.0 * dt
+            else:
+                self.wrong_way = False
+                self.wrong_way_time = max(0.0, getattr(self, "wrong_way_time", 0.0) - dt * 2.0)
+
+        # Fence boundary enforcement: kart must NEVER escape or get trapped in the outfield grass
+        d_fence = dist_to_dirt(self.x, self.y, 400.0)
+        max_fence_d = FENCE_OFFSET * TILE - 2.0
+        if d_fence > max_fence_d and not self.dead:
+            s, lat, tidx = track_coords(self.x, self.y, self.track_idx)
+            safe_lat = max(-ROAD_WIDTH * 0.35, min(ROAD_WIDTH * 0.35, lat))
+            rx, ry, heading = road_pose(s, safe_lat)
+            self.x, self.y = rx % WORLD, ry % WORLD
+            rad = math.radians(heading)
+            spd = max(45.0, math.hypot(self.vx, self.vy) * 0.65)
+            self.vx, self.vy = math.cos(rad) * spd, math.sin(rad) * spd
+            self.omega = 0.0
 
         # wedged against something? back up for a moment; still stuck after that -> rescue
         # (not for an eliminated kart: it's meant to coast to a stop and stay put, not keep
@@ -2795,6 +2835,8 @@ def step(dt, cars, controls):
                 car.use_sabotage("item")
             else:
                 car.start_shoot()
+        elif isinstance(action, (tuple, list)) and len(action) > 1 and action[0] == "shoot_aim":
+            car.start_shoot(aim_angle=action[1])
         elif action:
             car.start_bash(action)
     h = dt / PHYS_SUBSTEPS
@@ -3170,6 +3212,20 @@ class Camera:
         return (W / 2 + (dx * c - dy * s) * z + self.ox,
                 H / 2 + (dx * s + dy * c) * z + self.oy)
 
+    def to_world(self, sx, sy):
+        z = getattr(self, "zoom", ZOOM)
+        px = (sx - W / 2 - self.ox) / z
+        py = (sy - H / 2 - self.oy) / z
+        c = getattr(self, "cos_c", None)
+        if c is not None:
+            s = self.sin_c
+        else:
+            rad = -math.radians(self.angle + 90)
+            c, s = math.cos(rad), math.sin(rad)
+        dx = px * c + py * s
+        dy = -px * s + py * c
+        return (self.x + dx) % WORLD, (self.y + dy) % WORLD
+
 
 # =================================================================================================
 # particles
@@ -3395,6 +3451,48 @@ def _get_oil_zoom_sprite(width, length, zw, zl):
         _OIL_ZOOM_CACHE[key] = pygame.transform.scale(base, (zw, zl))
     return _OIL_ZOOM_CACHE[key]
 
+def is_obstacle_pos_clear(x, y, min_dist=28.0, check_boxes=True, check_cones=True,
+                           check_destruct=True, check_tires=True, check_ramps=True, check_oil=False):
+    """Ensures tires, vases, cones, boxes, and props do not overlap each other on the track."""
+    min_dist_sq = min_dist * min_dist
+    if check_boxes and "BOXES" in globals():
+        for b in BOXES:
+            dx = wrap_delta(x, b["x"])
+            dy = wrap_delta(y, b["y"])
+            if dx * dx + dy * dy < min_dist_sq:
+                return False
+    if check_cones and "CONES" in globals():
+        for c in CONES:
+            dx = wrap_delta(x, c["x"])
+            dy = wrap_delta(y, c["y"])
+            if dx * dx + dy * dy < min_dist_sq:
+                return False
+    if check_destruct and "DESTRUCTIBLES" in globals():
+        for d in DESTRUCTIBLES:
+            dx = wrap_delta(x, d["x"])
+            dy = wrap_delta(y, d["y"])
+            if dx * dx + dy * dy < min_dist_sq:
+                return False
+    if check_tires and "TIRES" in globals():
+        for tp in TIRES:
+            dx = wrap_delta(x, tp["x"])
+            dy = wrap_delta(y, tp["y"])
+            if dx * dx + dy * dy < min_dist_sq:
+                return False
+    if check_ramps and "RAMPS" in globals():
+        for rp in RAMPS:
+            dx = wrap_delta(x, rp["x"])
+            dy = wrap_delta(y, rp["y"])
+            if dx * dx + dy * dy < (min_dist + 16.0) ** 2:
+                return False
+    if check_oil and "OIL" in globals():
+        for o in OIL:
+            dx = wrap_delta(x, o[0])
+            dy = wrap_delta(y, o[1])
+            if dx * dx + dy * dy < min_dist_sq:
+                return False
+    return True
+
 def drop_oil(n=1, rng=None):
     if ROAD_LEN <= 1.0:
         return
@@ -3403,6 +3501,9 @@ def drop_oil(n=1, rng=None):
         s = r.uniform(0, ROAD_LEN)
         lat = r.uniform(-1, 1) * ROAD_WIDTH * 0.38
         x, y, heading = road_pose(s, lat)
+        ox, oy = x % WORLD, y % WORLD
+        if not is_obstacle_pos_clear(ox, oy, min_dist=30.0, check_boxes=True, check_cones=True, check_destruct=True, check_tires=True, check_ramps=True):
+            continue
 
         preset = r.choices(["narrow", "medium", "wide", "large_pool"], weights=[25, 30, 15, 30])[0]
         if preset == "narrow":
@@ -3420,7 +3521,7 @@ def drop_oil(n=1, rng=None):
 
         angle = heading + r.uniform(-15.0, 15.0)
         max_r = max(l, w) * 0.5
-        OIL.append([x % WORLD, y % WORLD, l, w, angle, max_r])
+        OIL.append([ox, oy, l, w, angle, max_r])
 
     if len(OIL) > OIL_MAX:
         del OIL[:len(OIL) - OIL_MAX]
@@ -3498,24 +3599,82 @@ TIRE_KINDS = ("tires1", "tires2", "tires3")
 TIRE_R = 18.0            # collision radius, roughly the drawn pile's footprint
 TIRE_RESTITUTION = 0.45  # a stacked tyre pile gives more than a fence, less than a cone
 
-def spawn_test_tires(rng=None):
-    # decorative tyre piles along the roadside -- solid, karts bounce off them
+def spawn_turn_tire_barriers(rng=None):
+    """Detects sharpest turn crash zones and places a small protective tire barrier cluster on the outside shoulder."""
     del TIRES[:]
-    if ROAD_LEN <= 1.0:
+    if not ROAD or ROAD_LEN <= 1.0 or len(ROAD) < 6:
         return
     r = rng if rng is not None else random
-    num_clusters = r.randint(6, 10)
-    for _ in range(num_clusters):
-        s = r.uniform(0, ROAD_LEN)
-        side = r.choice([-1.0, 1.0])
-        lat = side * ROAD_WIDTH * 0.48
-        x, y, _ = road_pose(s, lat)
-        TIRES.append({"x": x % WORLD, "y": y % WORLD, "angle": r.uniform(0, 360),
-                      "kind": r.choice(TIRE_KINDS)})
+    n = len(ROAD)
+
+    # 1. Identify turn zones based on track curvature
+    zones = []
+    cur_zone = None
+    for i in range(n):
+        t1 = ROAD_T[i]
+        t2 = ROAD_T[(i + 1) % n]
+        ang1 = math.atan2(t1[1], t1[0])
+        ang2 = math.atan2(t2[1], t2[0])
+        d_ang = (ang2 - ang1 + math.pi) % (2 * math.pi) - math.pi
+        s = ROAD_S[i]
+        if abs(d_ang) > 0.008:
+            # d_ang > 0 = turning left -> centrifugal drift to right (side = -1.0)
+            # d_ang < 0 = turning right -> centrifugal drift to left (side = 1.0)
+            side = -1.0 if d_ang > 0 else 1.0
+            if cur_zone is not None and cur_zone["side"] == side:
+                cur_zone["end_s"] = s
+                cur_zone["count"] += 1
+                cur_zone["max_curv"] = max(cur_zone["max_curv"], abs(d_ang))
+            else:
+                if cur_zone and cur_zone["count"] >= 3:
+                    zones.append(cur_zone)
+                cur_zone = {"start_s": s, "end_s": s, "side": side, "count": 1, "max_curv": abs(d_ang)}
+        else:
+            if cur_zone and cur_zone["count"] >= 3:
+                zones.append(cur_zone)
+            cur_zone = None
+    if cur_zone and cur_zone["count"] >= 3:
+        zones.append(cur_zone)
+
+    if not zones:
+        return
+
+    # Select only the top 2-3 sharpest corners with the highest curvature (avoid too many tires)
+    zones.sort(key=lambda z: z.get("max_curv", 0.0), reverse=True)
+    sharp_zones = zones[:3]
+
+    # Place a small, tidy cluster of 2 to 3 tires at each chosen corner
+    for z in sharp_zones:
+        start_s = z["start_s"]
+        end_s = z["end_s"]
+        side = z["side"]
+        mid_s = (start_s + (end_s - start_s) % ROAD_LEN * 0.5) % ROAD_LEN
+        for step_i in (-1, 0, 1):
+            ts = (mid_s + step_i * 22.0) % ROAD_LEN
+            lat = side * (ROAD_WIDTH * 0.38)
+            x, y, heading = road_pose(ts, lat)
+            pos_x, pos_y = x % WORLD, y % WORLD
+            # The tire barrier must sit firmly on the road surface, never in the dirt buffer or against the fence
+            if dist_to_dirt(pos_x, pos_y, 400.0) > 0.0:
+                continue
+            if not is_obstacle_pos_clear(pos_x, pos_y, min_dist=28.0, check_tires=True):
+                continue
+            TIRES.append({
+                "x": pos_x,
+                "y": pos_y,
+                "angle": heading + r.uniform(-12, 12),
+                "kind": r.choice(TIRE_KINDS),
+                "wobble": 0.0,
+            })
+
+spawn_test_tires = spawn_turn_tire_barriers
 
 def draw_tires(screen, cam):
     for tp in TIRES:
-        ramps.draw(screen, cam, tp["kind"], tp["x"], tp["y"], tp["angle"])
+        wox = 0.0
+        if tp.get("wobble", 0.0) > 0.0:
+            wox = math.sin(tp["wobble"] * 40.0) * 3.0 / ZOOM
+        ramps.draw(screen, cam, tp["kind"], tp["x"] + wox, tp["y"], tp["angle"])
 
 def draw_trees(screen, cam):
     # sprite-stack trees at the grid cells _bake_bushes picked; angle 0 keeps the baked-in
@@ -3529,11 +3688,16 @@ def draw_trees(screen, cam):
         ramps.draw(screen, cam, TREE_STACK_SEQ[idx], x, y, 0.0)
 
 def _update_tires(cars):
-    # tyre piles are heavy and don't move; a kart hits one, gets shoved out and bounces off
+    # Rubber bouncy tire barriers:
+    # When colliding with a tire barrier, cars do not die or lose hearts.
+    # Depending on impact speed, the tire pushes / bounces the car back onto the track.
     if not TIRES:
         return
     min_dist = TIRE_R + CAR_HW
     for tp in TIRES:
+        if tp.get("wobble", 0.0) > 0.0:
+            tp["wobble"] = max(0.0, tp["wobble"] - 0.016)
+
         for car in cars:
             dx, dy = wrap_delta(tp["x"], car.x), wrap_delta(tp["y"], car.y)
             dist_sq = dx * dx + dy * dy
@@ -3542,21 +3706,64 @@ def _update_tires(cars):
             dist = max(0.001, math.sqrt(dist_sq))
             nx, ny = dx / dist, dy / dist
             pen = min_dist - dist
-            car.x = (car.x + nx * pen) % WORLD
-            car.y = (car.y + ny * pen) % WORLD
+
+            # 1. Heart protection & life preservation (no death, no heart loss from tires)
+            car.tire_bounce_grace = 1.2
+            car.heart_cooldown = max(car.heart_cooldown, 1.8)
+            if car.hearts < 1.0:
+                car.hearts = 1.0
+            car.dead = False
+
+            # 2. Determine inward direction toward the track centerline
+            s_tp, lat_tp, tidx = track_coords(tp["x"], tp["y"])
+            rx, ry, _ = road_pose(s_tp, 0.0)
+            in_dx = wrap_delta(tp["x"], rx)
+            in_dy = wrap_delta(tp["y"], ry)
+            in_dist = max(0.001, math.hypot(in_dx, in_dy))
+            ix, iy = in_dx / in_dist, in_dy / in_dist
+
+            # 3. Blend collision normal with inward track normal
+            bx = 0.35 * nx + 0.65 * ix
+            by = 0.35 * ny + 0.65 * iy
+            b_mag = max(0.001, math.hypot(bx, by))
+            bx /= b_mag
+            by /= b_mag
+
+            # 4. Measure impact speed
+            v_mag = math.hypot(car.vx, car.vy)
             vn = car.vx * nx + car.vy * ny
-            if vn < 0:
-                j = -(1.0 + TIRE_RESTITUTION) * vn
-                car.vx += nx * j
-                car.vy += ny * j
-                car.omega += random.choice([-1, 1]) * min(0.9, j * 0.01)
-                car.impact = max(car.impact, min(120.0, j * 0.6))
-                if j > 40:
-                    spawn_particles(car.x - nx * CAR_HW, car.y - ny * CAR_HW,
-                                     min(int(j / 10), 14), 90, (30, 32, 38), 0.4)
-                if j > 25:
-                    play_at("tire_hit", tp["x"], tp["y"], min(1.0, 0.35 + j / 200.0))
-            break   # one tyre pile hit per car per frame is enough
+            v_impact = max(abs(vn), v_mag * 0.75, 45.0)
+
+            # 5. Rubbery bouncy push back toward the track
+            bounce_v = min(360.0, max(110.0, v_impact * 1.3))
+            car.vx = bx * bounce_v
+            car.vy = by * bounce_v
+
+            # 6. Reorient car slightly toward track tangent
+            tx, ty = ROAD_T[tidx]
+            track_deg = math.degrees(math.atan2(ty, tx))
+            ang_err = (track_deg - car.angle + 180) % 360 - 180
+            car.omega = max(-2.0, min(2.0, car.omega * 0.2 + ang_err * 0.03))
+
+            # 7. Push out of penetration
+            car.x = (car.x + bx * (pen + 4.0)) % WORLD
+            car.y = (car.y + by * (pen + 4.0)) % WORLD
+
+            # Invariant fence guard: strictly guarantee kart stays inside fence
+            fence_lim = FENCE_OFFSET * TILE - 2.0
+            cur_d = dist_to_dirt(car.x, car.y, 400.0)
+            if cur_d > fence_lim:
+                car.x = (car.x + ix * (cur_d - fence_lim + 1.0)) % WORLD
+                car.y = (car.y + iy * (cur_d - fence_lim + 1.0)) % WORLD
+
+            # 8. Feedback (particles, sound, wobble)
+            tp["wobble"] = 0.35
+            car.impact = min(40.0, max(10.0, v_impact * 0.25))
+            if v_impact > 30.0:
+                spawn_particles(car.x, car.y, min(int(v_impact / 8), 12), 100, (40, 42, 48), 0.4)
+            if v_impact > 25.0:
+                play_at("tire_hit", tp["x"], tp["y"], min(1.0, 0.4 + v_impact / 180.0))
+            break
 
 def draw_oil(screen, cam):
     for item in OIL:
@@ -3628,7 +3835,10 @@ def spawn_boxes():
         s = (i + 0.5) / BOX_COUNT * ROAD_LEN                     # evenly spaced around the loop
         lateral = rng.uniform(-1, 1) * ROAD_WIDTH * 0.5 * BOX_LATERAL
         x, y, _ = road_pose(s, lateral)
-        BOXES.append({"x": x % WORLD, "y": y % WORLD, "kind": "mystery",
+        bx, by = x % WORLD, y % WORLD
+        if not is_obstacle_pos_clear(bx, by, min_dist=28.0, check_boxes=True, check_tires=True, check_ramps=True):
+            continue
+        BOXES.append({"x": bx, "y": by, "kind": "mystery",
                       "phase": rng.uniform(0, 2 * math.pi), "timer": 0.0})
 
 def give_powerup(car, kind):
@@ -3695,20 +3905,23 @@ def spawn_traffic_cones(rng=None):
         return
     r = rng if rng is not None else random
     # Place cones along road borders / corner apexes / chicanes
-    num_clusters = r.randint(6, 10)
+    num_clusters = r.randint(5, 8)
     for _ in range(num_clusters):
         s = r.uniform(0, ROAD_LEN)
         side = r.choice([-1.0, 1.0])
         cluster_len = r.choice([2, 3])
         for step_i in range(cluster_len):
-            cs = (s + step_i * 20.0) % ROAD_LEN
+            cs = (s + step_i * 22.0) % ROAD_LEN
             lat = side * ROAD_WIDTH * 0.44
             cx, cy, _ = road_pose(cs, lat)
+            pos_x, pos_y = cx % WORLD, cy % WORLD
+            if not is_obstacle_pos_clear(pos_x, pos_y, min_dist=28.0, check_boxes=True, check_cones=True, check_tires=True, check_ramps=True):
+                continue
             CONES.append({
-                "x": cx % WORLD,
-                "y": cy % WORLD,
-                "base_x": cx % WORLD,
-                "base_y": cy % WORLD,
+                "x": pos_x,
+                "y": pos_y,
+                "base_x": pos_x,
+                "base_y": pos_y,
                 "vx": 0.0,
                 "vy": 0.0,
                 "angle": 0.0,
@@ -3795,7 +4008,7 @@ def _update_cones(dt, cars):
     if any(c.get("dead") for c in CONES):
         CONES[:] = [c for c in CONES if not c.get("dead", False)]
 
-def throw_traffic_cone(car, forward=True):
+def throw_traffic_cone(car, forward=False):
     rad = math.radians(car.angle)
     c, s = math.cos(rad), math.sin(rad)
     if forward:
@@ -3822,8 +4035,8 @@ def throw_traffic_cone(car, forward=True):
         spawn_particles(cx, cy, 10, 80, (255, 140, 30), 0.4)
         play_at("cone_throw", cx, cy)
     else:
-        cx = (car.x - c * (CAR_HL + 16.0)) % WORLD
-        cy = (car.y - s * (CAR_HL + 16.0)) % WORLD
+        cx = (car.x - c * (CAR_HL + 20.0)) % WORLD
+        cy = (car.y - s * (CAR_HL + 20.0)) % WORLD
         CONES.append({
             "x": cx,
             "y": cy,
@@ -3831,7 +4044,7 @@ def throw_traffic_cone(car, forward=True):
             "base_y": cy,
             "vx": 0.0,
             "vy": 0.0,
-            "angle": 0.0,
+            "angle": car.angle,
             "vrot": 0.0,
             "knocked": False,
             "timer": 15.0,
@@ -3845,8 +4058,8 @@ def throw_traffic_cone(car, forward=True):
 def spill_oil(car):
     rad = math.radians(car.angle)
     c, s = math.cos(rad), math.sin(rad)
-    ox = (car.x - c * (CAR_HL + 16.0)) % WORLD
-    oy = (car.y - s * (CAR_HL + 16.0)) % WORLD
+    ox = (car.x - c * (CAR_HL + 20.0)) % WORLD
+    oy = (car.y - s * (CAR_HL + 20.0)) % WORLD
     w = random.choice([28, 36, 44])
     l = random.choice([48, 64, 80])
     angle = car.angle + random.uniform(-10.0, 10.0)
@@ -3866,13 +4079,13 @@ def spawn_destructibles(rng=None):
     kinds = [k for k in ("barrel", "box", "vase") if k in DESTRUCT_SURF]
     if not kinds:
         return
-    num_clusters = r.randint(8, 14)
+    num_clusters = r.randint(6, 10)
     for _ in range(num_clusters):
         s = r.uniform(0, ROAD_LEN)
         side = r.choice([-1.0, 1.0])
-        cluster_len = r.choice([2, 3, 4])
+        cluster_len = r.choice([2, 3])
         cluster_kind = r.choice(kinds)
-        spacing = r.uniform(18.0, 26.0)
+        spacing = r.uniform(20.0, 26.0)
         for step_i in range(cluster_len):
             cs = (s + step_i * spacing) % ROAD_LEN
             lat = side * ROAD_WIDTH * 0.44
@@ -3881,21 +4094,7 @@ def spawn_destructibles(rng=None):
             cx, cy, _ = road_pose(cs, lat)
             pos_x = (cx + dx_off) % WORLD
             pos_y = (cy + dy_off) % WORLD
-            too_close = False
-            for c in CONES:
-                dx = wrap_delta(pos_x, c["x"])
-                dy = wrap_delta(pos_y, c["y"])
-                if dx * dx + dy * dy < 30.0 * 30.0:
-                    too_close = True
-                    break
-            if not too_close:
-                for e in DESTRUCTIBLES:
-                    dx = wrap_delta(pos_x, e["x"])
-                    dy = wrap_delta(pos_y, e["y"])
-                    if dx * dx + dy * dy < 30.0 * 30.0:
-                        too_close = True
-                        break
-            if too_close:
+            if not is_obstacle_pos_clear(pos_x, pos_y, min_dist=28.0, check_boxes=True, check_cones=True, check_destruct=True, check_tires=True, check_ramps=True):
                 continue
             k = cluster_kind if r.random() < 0.65 else r.choice(kinds)
             DESTRUCTIBLES.append({
@@ -4805,6 +5004,21 @@ def draw_hud(screen, car, font=None, cars=None, hud_opacity=1.0):
         hud_f = get_font(18)
         lbl = _text_outlined(hud_f, f"{key_hint} {item_label}", (255, 235, 120))
         target_s.blit(lbl, (ix + 6, iy + 4))
+
+    # Flashing wrong-way warning banner
+    if getattr(car, "wrong_way", False) and not car.dead:
+        flash = (int(time.time() * 5) % 2 == 0)
+        ww_f = get_font(26)
+        warn_col = (255, 65, 65) if flash else (255, 220, 50)
+        lbl = _text_outlined(ww_f, "WRONG WAY!", warn_col, (15, 15, 20), 3)
+        r = lbl.get_rect(center=(W // 2, 75))
+        bg_rect = r.inflate(28, 10)
+        bg = pygame.Surface(bg_rect.size, pygame.SRCALPHA)
+        bg.fill((25, 12, 12, 215 if flash else 165))
+        pygame.draw.rect(bg, warn_col, bg.get_rect(), 2, border_radius=6)
+        target_s.blit(bg, bg_rect.topleft)
+        target_s.blit(lbl, r)
+
     if cars is not None:
         draw_leaderboard(target_s, cars, car)
         draw_minimap(target_s, cars, car)

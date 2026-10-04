@@ -140,7 +140,7 @@ BCAST_HZ = 20       # how often each client broadcasts its car state
 HELP_LINES = [
     "A / D or arrows / left stick: steer (the kart always drives)",
     "Q / E or LB / RB: side-bash     SPACE or (A): ram",
-    "Shift or (B) or RT: drift     X: shoot     (Y): cone / item",
+    "Shift / RT: drift   L-Click / X: shoot forward   R-Click / C: cone/oil",
     "Esc or Start: menu     R: reload sim.py",
 ]
 
@@ -777,7 +777,7 @@ def main():
     host_laps_btn = Button((336, 150, 228, 28), "")
     host_bots_btn = Button((336, 184, 228, 28), "")
     host_track_btn = Button((336, 218, 228, 28), "")
-    lobby_settings = {"bot_aggression": "Normal", "laps": 3, "bot_count": "fill", "track": "meadow_dirt"}
+    lobby_settings = {"bot_aggression": "Normal", "laps": 3, "bot_count": "fill", "track": profile.get("track_type", "meadow_dirt")}
     # general-tab sliders (left column): each a 0..1 value with a getter/setter + profile key
     SL_X, SL_W, SL_H = 24, 150, 8
     sliders = [
@@ -1050,9 +1050,11 @@ def main():
         mp_players = start_msg["players"]
         current_seed = start_msg["seed"]
         st = start_msg.get("settings") or (lobby.get("settings") if lobby else {}) or {}
-        tr_type = st.get("track", "meadow_dirt")
+        tr_type = st.get("track") or lobby_settings.get("track", "meadow_dirt")
+        sim.set_track_type(tr_type)
+        sim.set_tileset(tr_type)
         sim.new_map(current_seed, tileset=tr_type)
-        track_title = sim.get_tileset_title(sim.CURRENT_TILESET)
+        track_title = sim.get_tileset_title(tr_type)
         sim.trigger_banner(track_title.upper(), (255, 230, 70), sub=f"MULTIPLAYER - {st.get('laps', 3)} LAPS", dur=2.0)
         sim.NET_ROLE = "host" if is_host() else "client"
         sim.TOTAL_LAPS = int(st.get("laps", 3))
@@ -1106,6 +1108,7 @@ def main():
     def host_create():
         nonlocal netc, pending_net, net_msg, my_ready
         net_msg, my_ready = "Connecting...", False
+        lobby_settings["track"] = profile.get("track_type", sim.get_track_type())
         netc = net.Net()
         netc.connect()
         pending_net = ("host", mp_max)
@@ -1459,33 +1462,60 @@ def main():
                 elif event.key == pygame.K_ESCAPE and state == "lobby":
                     net_disconnect()
                     state = "mp_menu"
-            elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-                if state in MENU_STATES:
-                    sim.play_ui("ui_click")
-                if state == "menu":
-                    opened_social = False
-                    for sb in social_buttons:
-                        if sb["rect"].collidepoint(mouse_pos):
-                            try:
-                                webbrowser.open(sb["url"])
-                            except Exception as e:
-                                print("failed to open social link:", e)
-                            opened_social = True
-                            break
-                    if opened_social:
-                        continue
-                    for name, btn in menu_buttons:
-                        if not btn.clicked(mouse_pos):
+            elif event.type == pygame.MOUSEBUTTONDOWN:
+                if state == "playing" and player is not None and not player.dead and not spectating:
+                    if event.button == 1:
+                        # Left click: Shoot projectile at mouse aim direction (front only)
+                        mouse_x, mouse_y = event.pos
+                        if cam is not None:
+                            wx, wy = cam.to_world(mouse_x, mouse_y)
+                            dx = sim.wrap_delta(player.x, wx)
+                            dy = sim.wrap_delta(player.y, wy)
+                            aim_ang = math.degrees(math.atan2(dy, dx))
+                            diff = (aim_ang - player.angle + 180) % 360 - 180
+                            if abs(diff) <= 85.0:  # u can only shoot infront not back
+                                action = ("shoot_aim", aim_ang)
+                    elif event.button == 3:
+                        # Right click: spawn cone or oil behind player
+                        if player.item == "oil":
+                            action = "oil"
+                        elif player.item == "cone":
+                            action = "drop_cone"
+                        else:
+                            last_sab = getattr(player, "_last_sab", "oil")
+                            if last_sab == "oil":
+                                action = "drop_cone"
+                                player._last_sab = "cone"
+                            else:
+                                action = "oil"
+                                player._last_sab = "oil"
+                elif event.button == 1:
+                    if state in MENU_STATES:
+                        sim.play_ui("ui_click")
+                    if state == "menu":
+                        opened_social = False
+                        for sb in social_buttons:
+                            if sb["rect"].collidepoint(mouse_pos):
+                                try:
+                                    webbrowser.open(sb["url"])
+                                except Exception as e:
+                                    print("failed to open social link:", e)
+                                opened_social = True
+                                break
+                        if opened_social:
                             continue
-                        if name == "resume":
-                            state = "playing"
-                        elif name == "play":
-                            state = "mode"              # Singleplayer / Multiplayer
-                        elif name == "settings":
-                            state = "settings"
-                        elif name == "quit":
-                            running = False
-                        break
+                        for name, btn in menu_buttons:
+                            if not btn.clicked(mouse_pos):
+                                continue
+                            if name == "resume":
+                                state = "playing"
+                            elif name == "play":
+                                state = "mode"              # Singleplayer / Multiplayer
+                            elif name == "settings":
+                                state = "settings"
+                            elif name == "quit":
+                                running = False
+                            break
                 elif state == "name_entry":
                     if start_btn.clicked(mouse_pos):
                         confirm_name()
