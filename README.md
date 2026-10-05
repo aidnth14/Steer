@@ -3,7 +3,7 @@
 2D top-down kart racing in pygame. The kart always drives forward: you steer, and you
 fight. Bash rivals off the dirt road into the fence before they do it to you.
 
-**Version 1.2.0** · Online multiplayer live on Render · Windows / macOS (Intel + Apple Silicon)
+**Version 1.3.0** · Online multiplayer live on Render · Windows / macOS (Intel + Apple Silicon)
 / Linux / Android · Source-available (see [LICENSE](LICENSE)).
 
 ## Run from source
@@ -431,6 +431,44 @@ and icons listed above are **not** covered by that license and remain under thei
 ---
 
 # Development Worklog & Changelog
+
+## v1.3.0 — 2026-10-05
+
+**Fixes:**
+- Frozen-build zip-bomb: the auto-started local multiplayer server was being relaunched
+  through the game's own packaged binary (no bare interpreter at `sys.executable` once
+  frozen), which recursively spawned more game windows instead of the server. Routed
+  through a `STEER_SERVER_MODE` env flag so the frozen binary can run server-only.
+- `UnboundLocalError` crash on launch (`spectating` read before its only assignment).
+- Chill-difficulty bots had zero traffic awareness and would drive straight through the
+  player; they now steer around nearby cars while still taking no bash/ram/item actions.
+- Bots had an unfair edge on oil slicks / after a bash-stagger — their smooth pursuit
+  steering rarely demanded enough grip to visibly slip the way a human does. They now
+  lose steering authority the same way a human would in the same situation.
+- The local multiplayer server auto-started by `ensure_local_server()` was never tracked
+  or shut down — it outlived the game indefinitely, even for single-player sessions. Now
+  terminated on quit.
+- Host/Join had no debounce while connecting (the server's cold-start wake can take up to
+  ~30s) — repeated presses leaked orphaned connections and could create duplicate rooms.
+- Lobby "Ready" had no keyboard binding (mouse/gamepad only).
+- Selecting Multiplayer by keyboard skipped the name-entry screen that mouse/gamepad both
+  use, so keyboard-only players never got prompted for their multiplayer name/flag.
+- `touch.py` (mobile/Android touch controls, imported unconditionally by `main.py`) had
+  never been committed — every platform build was missing it.
+- Removed dead `"battle"` game-mode branches (never actually selectable) and the unused
+  `"spectate"` lobby setting (no UI control, nothing read it back).
+
+**New:**
+- Post-race cinematic replay: a scripted camera orbit condenses the just-finished race
+  into a slow-motion flythrough (real-time to ~0.6×, following the player) before cutting
+  to the results screen. Skippable with any key/click/tap.
+
+**Verified this session:** all 4 single-player modes × all 4 bot-difficulty levels run a
+full race through to the cinematic with no exceptions; the multiplayer wire protocol
+(room/join/ready/auto-start/settings-authorization/state-relay/finish-relay/host-migration)
+was exercised end-to-end against the real server with two live clients.
+
+---
 
 # Steer — solo polish session
 

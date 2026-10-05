@@ -3152,60 +3152,66 @@ def bot_control(bot, cars, dt):
         bot.lane_target = rnd.uniform(-1, 1) * half * bot.lanes
 
     # pick the rival to deal with: nearest one around/ahead, grudges and the player first
+    # (scanned on every level, even Chill, so Chill bots still steer clear of traffic --
+    # they just don't lean in, bash, ram, or sabotage with it)
     action = None
     target, best = None, None
-    if BOT_AGGRESSION != "Chill":
-        for o in cars:
-            if o is bot:
-                continue
-            dx, dy = wrap_delta(bot.x, o.x), wrap_delta(bot.y, o.y)
-            fx, fy = dx * c + dy * s, -dx * s + dy * c
-            if fx < -50 or fx > 170 or abs(fy) > 90:
-                continue
-            score = abs(fx) + 1.5 * abs(fy)
-            if o.uid == bot.grudge:
-                score *= 0.4
-            if bot.hunts_player and not o.is_bot:
-                score *= 0.5
-            if best is None or score < best:
-                best, target, tfx, tfy = score, o, fx, fy
+    for o in cars:
+        if o is bot:
+            continue
+        dx, dy = wrap_delta(bot.x, o.x), wrap_delta(bot.y, o.y)
+        fx, fy = dx * c + dy * s, -dx * s + dy * c
+        if fx < -50 or fx > 170 or abs(fy) > 90:
+            continue
+        score = abs(fx) + 1.5 * abs(fy)
+        if o.uid == bot.grudge:
+            score *= 0.4
+        if bot.hunts_player and not o.is_bot:
+            score *= 0.5
+        if best is None or score < best:
+            best, target, tfx, tfy = score, o, fx, fy
 
     lane_goal = 0.0 if BOT_AGGRESSION == "Chill" else bot.lane_target
     if target is not None and bot.reverse_time <= 0:
         _, t_lat, _ = track_coords(target.x, target.y, idx)
-        aggr = min(1.0, bot.aggression * (1.6 if target.uid == bot.grudge else 1.0))
-        if BOT_AGGRESSION == "Demolition":
-            aggr = 1.0
-        if aggr > 0.45 and -30 < tfx < 110:
-            lane_goal = t_lat                       # lean on them: drive into their lane
-        elif 0 < tfx < 110 and abs(t_lat - lat) < 30:
-            lane_goal = t_lat + (40 if t_lat < 0 else -40)   # not a fighter: go round them
-        if bot.bash_cd <= 0:
-            if abs(tfx) < 30 and 8 < abs(tfy) < 50:
-                # alongside: a side-bash pushes them across the road -- best when that's off it
-                push = 1 if t_lat > lat else -1
-                edge_gap = half + AI_EDGE_MARGIN - push * t_lat
-                p = aggr * AI_BASH_RATE * dt * (3.0 if edge_gap < 70 else 1.0)
-                if rnd.random() < p:
-                    action = "right" if tfy > 0 else "left"
-            elif 16 < tfx < 60 and abs(tfy) < 18:
-                closing = v_long - (target.vx * c + target.vy * s)
-                if closing > 20 and rnd.random() < aggr * AI_RAM_RATE * dt:
-                    action = "ram"
-        # fire a projectile at a rival lined up ahead and out of bash range
-        if action is None and bot.proj_cd <= 0 and 40 < tfx < 300 and abs(tfy) < 24:
-            if rnd.random() < aggr * 1.6 * dt:
-                action = "shoot"
-        # sabotage rivals with cones or oil slicks
-        if action is None:
-            if bot.item == "cone" or (bot.sabotage_cd <= 0 and rnd.random() < aggr * 0.35 * dt):
-                if 35 < tfx < 240 and abs(tfy) < 28:
-                    action = "cone"
-                elif -140 < tfx < -20 and abs(tfy) < 32:
-                    action = "drop_cone"
-            elif bot.item == "oil" or (bot.sabotage_cd <= 0 and rnd.random() < aggr * 0.35 * dt):
-                if -150 < tfx < -15 and abs(tfy) < 35:
-                    action = "oil"
+        if BOT_AGGRESSION == "Chill":
+            # just avoidance: steer clear of whoever's directly ahead, no leaning/bash/ram/items
+            if -20 < tfx < 110 and abs(tfy) < 55:
+                lane_goal = t_lat + (40 if t_lat < 0 else -40)
+        else:
+            aggr = min(1.0, bot.aggression * (1.6 if target.uid == bot.grudge else 1.0))
+            if BOT_AGGRESSION == "Demolition":
+                aggr = 1.0
+            if aggr > 0.45 and -30 < tfx < 110:
+                lane_goal = t_lat                       # lean on them: drive into their lane
+            elif 0 < tfx < 110 and abs(t_lat - lat) < 30:
+                lane_goal = t_lat + (40 if t_lat < 0 else -40)   # not a fighter: go round them
+            if bot.bash_cd <= 0:
+                if abs(tfx) < 30 and 8 < abs(tfy) < 50:
+                    # alongside: a side-bash pushes them across the road -- best when that's off it
+                    push = 1 if t_lat > lat else -1
+                    edge_gap = half + AI_EDGE_MARGIN - push * t_lat
+                    p = aggr * AI_BASH_RATE * dt * (3.0 if edge_gap < 70 else 1.0)
+                    if rnd.random() < p:
+                        action = "right" if tfy > 0 else "left"
+                elif 16 < tfx < 60 and abs(tfy) < 18:
+                    closing = v_long - (target.vx * c + target.vy * s)
+                    if closing > 20 and rnd.random() < aggr * AI_RAM_RATE * dt:
+                        action = "ram"
+            # fire a projectile at a rival lined up ahead and out of bash range
+            if action is None and bot.proj_cd <= 0 and 40 < tfx < 300 and abs(tfy) < 24:
+                if rnd.random() < aggr * 1.6 * dt:
+                    action = "shoot"
+            # sabotage rivals with cones or oil slicks
+            if action is None:
+                if bot.item == "cone" or (bot.sabotage_cd <= 0 and rnd.random() < aggr * 0.35 * dt):
+                    if 35 < tfx < 240 and abs(tfy) < 28:
+                        action = "cone"
+                    elif -140 < tfx < -20 and abs(tfy) < 32:
+                        action = "drop_cone"
+                elif bot.item == "oil" or (bot.sabotage_cd <= 0 and rnd.random() < aggr * 0.35 * dt):
+                    if -150 < tfx < -15 and abs(tfy) < 35:
+                        action = "oil"
 
     if bot.off_f > 0.2 or bot.off_r > 0.2:
         lane_goal = 0.0                             # off the road: head straight back on
@@ -3223,6 +3229,11 @@ def bot_control(bot, cars, dt):
     alpha = math.atan2(ly, lx)
     delta = math.atan2(2 * WHEELBASE * math.sin(alpha), look)
     steer = delta / steer_limit(max(abs(v_long), 1.0))
+    if bot.stagger > 0.0 or getattr(bot, "on_oil", False):
+        # oil/a bash throws off a bot's aim same as it would a human's -- without this a bot's
+        # smooth pursuit steering rarely demands enough grip to exceed the lowered cap, so it
+        # glides through a slick clean while a human visibly fishtails on the same patch
+        steer += rnd.uniform(-1.0, 1.0) * (0.55 if bot.stagger > 0.0 else 0.35)
     return max(-1.0, min(1.0, steer)), action
 
 

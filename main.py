@@ -1,3 +1,4 @@
+import atexit
 import math
 import os
 import random
@@ -13,8 +14,19 @@ import sim
 import net
 import buttonmanager
 import ui
+import touch
 
-VERSION = "1.2.0"
+if os.environ.get("STEER_SERVER_MODE"):
+    # Frozen builds have no separate python interpreter to hand server.py to, so
+    # ensure_local_server() re-execs this same binary with this flag set instead.
+    import asyncio
+    import server
+    asyncio.run(server.main())
+    sys.exit()
+
+IS_MOBILE = touch.detect_mobile()
+
+VERSION = "1.3.0"
 CREDIT = "made by @AidenShoroz · v" + VERSION
 # the icons in the menu's bottom-right corner: (icon, link). An icon only shows once its link is
 # filled in. Icons: "store" (bag), "video" (screen + play), "photo" (camera), "chat" (bubble).
@@ -71,10 +83,19 @@ def _safe_mtime(path):
 SERVER_PATH = os.path.join(os.path.dirname(__file__), "server.py")
 PROFILE_PATH = os.path.join(os.path.expanduser("~"), ".steer_profile.json")
 
+_LOCAL_SERVER_PROC = None   # the server we auto-started, if any -- so we can kill it on exit
+
+def shutdown_local_server():
+    global _LOCAL_SERVER_PROC
+    if _LOCAL_SERVER_PROC is not None and _LOCAL_SERVER_PROC.poll() is None:
+        _LOCAL_SERVER_PROC.terminate()
+    _LOCAL_SERVER_PROC = None
+
 def ensure_local_server():
     # autostarts server.py so Host/Join work with zero setup; no-op if STEER_SERVER_URL
     # points at a remote server, or something (us from a prior launch, docker-compose, a
     # manual run) is already listening on the local port
+    global _LOCAL_SERVER_PROC
     url = urlparse(net.DEFAULT_URL)
     if url.hostname not in ("localhost", "127.0.0.1"):
         return
@@ -85,9 +106,14 @@ def ensure_local_server():
             return
     try:
         log = open(os.path.join(os.path.dirname(__file__), "server.log"), "a")
-        subprocess.Popen([sys.executable, SERVER_PATH],
-                          env=dict(os.environ, PORT=str(port)),
-                          stdout=log, stderr=log, start_new_session=True)
+        # Frozen builds have no bare python interpreter at sys.executable — it's this
+        # app's own binary — so re-exec it with STEER_SERVER_MODE set instead of
+        # pointing it at server.py (which it can't run as a script).
+        cmd = [sys.executable] if FROZEN else [sys.executable, SERVER_PATH]
+        _LOCAL_SERVER_PROC = subprocess.Popen(
+            cmd, env=dict(os.environ, PORT=str(port), STEER_SERVER_MODE="1"),
+            stdout=log, stderr=log, start_new_session=True)
+        atexit.register(shutdown_local_server)
         print(f"Started local multiplayer server on {host}:{port} (log: server.log)")
     except OSError as e:
         print("Could not start local multiplayer server:", e)
@@ -480,6 +506,42 @@ def draw_masters_scoreboard(screen, final_order, player, game_mode="", team_resu
             b_txt = f_scores.render(b_str, True, b_col)
         screen.blit(b_txt, b_txt.get_rect(center=best_r.center))
 
+REPLAY_MAX_FRAMES = 20000     # ~5.5min at 60fps; caps the post-race replay recording's memory
+REPLAY_SPEED_MULT = 0.6       # true slow-motion -- plays slower than the race actually ran
+REPLAY_MIN_DURATION = 6.0     # floor so a very short race doesn't just blink past
+REPLAY_MAX_DURATION = 45.0    # ceiling so only unusually long races get sped back toward real-time
+
+class ReplayCamera:
+    """Scripted camera for the post-race cinematic: orbits slowly around whichever car it's
+    pointed at. Implements the same x/y/angle/zoom/to_screen interface as sim.Camera, so
+    sim.draw_world() renders through it with no changes."""
+    def __init__(self, x, y):
+        self.x, self.y = x, y
+        self.angle = 0.0
+        self.zoom = sim.ZOOM * 1.1
+        self.ox = self.oy = 0.0
+        self.orbit_t = 0.0
+        rad = -math.radians(self.angle + 90)
+        self.cos_c, self.sin_c = math.cos(rad), math.sin(rad)
+
+    def follow(self, dt, tx, ty):
+        self.orbit_t += dt
+        # hard-lock onto the target (like sim.Camera does for the car) rather than lerping --
+        # at fast-forward speeds the target can jump many px/tick and a lerp would never catch up
+        self.x, self.y = tx % sim.WORLD, ty % sim.WORLD
+        self.angle = (self.angle + dt * 4.0) % 360.0       # slow continuous orbit around the focus car
+        target_zoom = sim.ZOOM * (1.06 + 0.08 * math.sin(self.orbit_t * 0.2))
+        self.zoom += (target_zoom - self.zoom) * min(1.0, dt * 0.5)
+        self.ox = math.sin(self.orbit_t * 0.7) * 2.5       # a touch of handheld breathing, not full shake
+        self.oy = math.cos(self.orbit_t * 0.5) * 2.0
+        rad = -math.radians(self.angle + 90)
+        self.cos_c, self.sin_c = math.cos(rad), math.sin(rad)
+
+    def to_screen(self, wx, wy):
+        dx, dy = sim.wrap_delta(self.x, wx), sim.wrap_delta(self.y, wy)
+        return (sim.W / 2 + (dx * self.cos_c - dy * self.sin_c) * self.zoom + self.ox,
+                sim.H / 2 + (dx * self.sin_c + dy * self.cos_c) * self.zoom + self.oy)
+
 def main():
     global UI_POINTER
     ensure_local_server()
@@ -785,6 +847,16 @@ def main():
     font_small = sim.get_font(20)
     font_credits = sim.get_font(16)
 
+    # On-screen touch pad for the Android build. Gyro is the primary steering input on mobile,
+    # so default it on and hide the L/R arrows unless the player turns gyro off in Settings.
+    touch_ui = touch.TouchControls(sim.W, sim.H, font_credits)
+    if IS_MOBILE and not profile.get("_mobile_init"):
+        gyro_state["enabled"] = True
+        profile["gyro_steer"] = True
+        profile["_mobile_init"] = True
+        save_profile(profile)
+    touch_ui.set_steer_buttons(not gyro_state["enabled"])
+
     # gameplay screenshot used as the backdrop for menus / results, dimmed for legibility
     try:
         _bg = pygame.image.load(os.path.join(sim.UI_DIR, "menu_bg.png")).convert()
@@ -889,7 +961,7 @@ def main():
 
     def results_text():
         mode_name = dict(GAME_MODES).get(game_mode, "Race").upper()
-        sub = f"{mode_name} · {sim.TOTAL_LAPS} LAPS" if game_mode not in ("battle", "elim") else mode_name
+        sub = f"{mode_name} · {sim.TOTAL_LAPS} LAPS" if game_mode != "elim" else mode_name
         rows = results_rows()
         me = next((i for i, r in enumerate(rows) if r["you"]), None)
         if team_result:
@@ -906,7 +978,7 @@ def main():
             if rows[me]["laps_down"] >= 1 and not rows[me]["out"]:
                 n = rows[me]["laps_down"]
                 foot += f" · {n} LAP{'S' if n > 1 else ''} DOWN"
-            elif g is not None and not rows[me]["out"] and game_mode not in ("battle", "elim"):
+            elif g is not None and not rows[me]["out"] and game_mode != "elim":
                 foot += f" · +{g:.2f}S BEHIND {rows[0]['name'].upper()}"
         return sub, foot, rows
 
@@ -1035,6 +1107,14 @@ def main():
     slowmo_timer = 0.0          # bullet time remaining (s)
     slowmo_active = False       # currently running slow motion finish
     finish_pending = False      # true once race finish detected
+    replay_frames = []          # recorded (x,y,angle,vx,vy,boost,drift,dead,hearts,item,lap) per car per frame
+    cinematic_pos = 0.0         # fractional index into replay_frames during playback
+    cinematic_rate = 1.0        # frames of history advanced per second of playback
+    cinematic_cam = None        # ReplayCamera driving the post-race flythrough
+    cinematic_focus = 0         # index into cars of the car the cinematic camera follows
+    cinematic_last_lap = 0      # last lap number seen for the focus car (for LAP n callouts)
+    cinematic_hold = 0.0        # seconds to linger on the final frame before cutting to results
+    cinematic_finale_shown = False  # one-shot guard for the closing "WINNER!" banner
     final_lap_announced = False # true once FINAL LAP banner triggered
     reported_dead = set()       # car uids reported dead (for takedown banners)
     hud_mode = profile.get("hud_mode", "FULL")  # "FULL" or "IMMERSIVE"
@@ -1077,7 +1157,6 @@ def main():
         "slipstream": "ON",
         "items": "Standard",
         "privacy": "Public",
-        "spectate": "Allowed",
     }
     # general-tab sliders: each a 0..1 value with a getter/setter + profile key
     SL_X, SL_W, SL_H = 24, 150, 8
@@ -1399,6 +1478,7 @@ def main():
         nonlocal letterbox_h, target_letterbox_h, slowmo_timer, slowmo_active, finish_pending
         nonlocal final_lap_announced, reported_dead, hud_alpha, hud_reveal_timer
         nonlocal prev_player_hearts, prev_player_rank, prev_player_lap, race_was_online
+        nonlocal replay_frames
         sim.NET_ROLE = "off"
         online = False
         race_was_online = False
@@ -1438,6 +1518,7 @@ def main():
         prev_player_lap = 0
         elim_timer, ghost_rec, last_ranks, trial_lap, popup = 0.0, [], {}, 0, None
         ghost_best, ghost_time = None, 0.0
+        replay_frames = []
         attract_cars.clear()        # its map is gone; rebuild the backdrop when we return
         state = "playing"
 
@@ -1534,6 +1615,7 @@ def main():
         nonlocal letterbox_h, target_letterbox_h, slowmo_timer, slowmo_active, finish_pending
         nonlocal final_lap_announced, reported_dead, hud_alpha, hud_reveal_timer
         nonlocal prev_player_hearts, prev_player_rank, prev_player_lap, race_was_online
+        nonlocal replay_frames
         race_was_online = True
         mp_players = start_msg["players"]
         current_seed = start_msg["seed"]
@@ -1566,6 +1648,7 @@ def main():
         prev_player_hearts = player.hearts if player else sim.HEART_COUNT
         prev_player_rank = 1
         prev_player_lap = 0
+        replay_frames = []
         attract_cars.clear()
         state = "playing"
 
@@ -1586,6 +1669,28 @@ def main():
             net_disconnect()
             state = "results"
 
+    def start_cinematic():
+        # kicks off the post-race flythrough once the finish slow-mo has settled; falls back
+        # straight to results if nothing was recorded (instant/edge-case finishes)
+        nonlocal state, cinematic_pos, cinematic_rate, cinematic_cam
+        nonlocal cinematic_focus, cinematic_last_lap, cinematic_hold, cinematic_finale_shown
+        if not replay_frames or not cars:
+            state = "results"
+            return
+        cinematic_pos = 0.0
+        duration = max(REPLAY_MIN_DURATION, min(REPLAY_MAX_DURATION,
+                                                  len(replay_frames) / 60.0 / REPLAY_SPEED_MULT))
+        cinematic_rate = len(replay_frames) / duration
+        cinematic_hold = 2.2
+        cinematic_finale_shown = False
+        # it's a recap of your race, so follow you -- not whichever bot happened to win
+        focus_car = player if player is not None else (final_order[0] if final_order else cars[0])
+        cinematic_focus = cars.index(focus_car) if focus_car in cars else 0
+        frame0 = replay_frames[0][cinematic_focus]
+        cinematic_cam = ReplayCamera(frame0[0], frame0[1])
+        cinematic_last_lap = frame0[10]
+        state = "cinematic"
+
     def confirm_name():
         nonlocal state
         if name_next == "single":
@@ -1595,6 +1700,8 @@ def main():
 
     def host_create():
         nonlocal netc, pending_net, net_msg, my_ready
+        if netc is not None:
+            netc.close()    # a stray connection from a prior attempt -- don't leak it
         net_msg, my_ready = "Connecting...", False
         lobby_settings["track"] = profile.get("track_type", sim.get_track_type())
         netc = net.Net()
@@ -1606,6 +1713,8 @@ def main():
         if len(join_code) != 6:
             net_msg = "Enter the 6-character code"
             return
+        if netc is not None:
+            netc.close()    # a stray connection from a prior attempt -- don't leak it
         net_msg, my_ready = "Connecting...", False
         netc = net.Net()
         netc.connect()
@@ -1804,11 +1913,21 @@ def main():
         last_sel = cur_sel
 
         action = None   # the player's bash this frame, if any
+        spectating = False
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 running = False
             elif event.type == sim.MUSIC_END:
                 sim.next_track()
+            elif state == "cinematic" and event.type in (
+                    pygame.KEYDOWN, pygame.MOUSEBUTTONDOWN, pygame.JOYBUTTONDOWN, pygame.FINGERDOWN):
+                state = "results"       # any input skips straight to the results screen
+                continue
+            elif event.type in (pygame.FINGERDOWN, pygame.FINGERMOTION, pygame.FINGERUP):
+                # The on-screen pad only drives the race; menus run off SDL's mouse emulation.
+                if state == "playing":
+                    touch_ui.handle_event(event)
+                continue
             elif event.type == pygame.KEYDOWN and event.key == pygame.K_F11 and awaiting_key is None:
                 toggle_fullscreen()
                 continue
@@ -1883,7 +2002,8 @@ def main():
                             state = "gamemode"
                         elif nm == "multi":
                             mp_tab, net_msg = "host", ""
-                            state = "mp_menu"
+                            name_next = "mp"
+                            state = "name_entry"
                         elif nm == "back":
                             state = "menu"
                     elif event.key == pygame.K_ESCAPE:
@@ -1969,11 +2089,14 @@ def main():
                         results_sel = (results_sel + 1) % nb
                     elif event.key in (pygame.K_RETURN, pygame.K_KP_ENTER, pygame.K_SPACE):
                         results_choose(min(results_sel, nb - 1))
-                elif event.key == pygame.K_ESCAPE and state == "lobby":
-                    net_disconnect()
-                    state = "mp_menu"
+                elif state == "lobby":
+                    if event.key == pygame.K_ESCAPE:
+                        net_disconnect()
+                        state = "mp_menu"
+                    elif event.key in (pygame.K_RETURN, pygame.K_KP_ENTER, pygame.K_SPACE):
+                        toggle_ready()
             elif event.type == pygame.MOUSEBUTTONDOWN:
-                if state == "playing" and player is not None and not player.dead and not spectating:
+                if state == "playing" and not IS_MOBILE and player is not None and not player.dead and not spectating:
                     if event.button == 1:
                         # Left click: Shoot projectile at mouse aim direction (front only)
                         mouse_x, mouse_y = event.pos
@@ -2474,6 +2597,8 @@ def main():
                 screen.blit(big, big.get_rect(center=(sim.W / 2, sim.H / 2 - 20)))
                 sim.draw_callout_banner(screen)
                 sim.draw_letterbox(screen, letterbox_h)
+                if IS_MOBILE:
+                    touch_ui.draw(screen)
             else:
                 if not online and not FROZEN:   # hot reload: local single-player, source on disk
                     mtime = _safe_mtime(SIM_PATH)
@@ -2482,17 +2607,40 @@ def main():
                         reload_and_migrate()
 
                 keys = pygame.key.get_pressed()
+                # read the on-screen pad once per frame (edge triggers consumed here)
+                tc = touch_ui.read()
+                touch_ui.set_steer_buttons(not gyro_state["enabled"])
+                if tc["recenter"]:
+                    gyro_recenter()
+                if tc["pause"]:
+                    state = "menu"
+                    touch_ui.release_all()
                 steer = 0.0
                 if keys[pygame.K_LEFT] or keys[keybinds.get("left", pygame.K_a)]:
                     steer -= 1
                 if keys[pygame.K_RIGHT] or keys[keybinds.get("right", pygame.K_d)]:
                     steer += 1
-                steer = max(-1.0, min(1.0, steer + pad_steer() + gyro_steer()))
+                steer = max(-1.0, min(1.0, steer + pad_steer() + gyro_steer() + tc["steer"]))
                 if sim.INVERT_STEER:
                     steer = -steer
                 steer = sim.apply_steer_controls(steer)
-                drift = keys[keybinds.get("drift", pygame.K_LSHIFT)] or pad_drift()
-                brake = keys[keybinds.get("brake", pygame.K_s)] or pad_brake()
+                drift = keys[keybinds.get("drift", pygame.K_LSHIFT)] or pad_drift() or tc["drift"]
+                brake = keys[keybinds.get("brake", pygame.K_s)] or pad_brake() or tc["brake"]
+                # touch action buttons: fire shoots straight ahead, drop toggles oil/cone, ram bashes
+                if action is None and not spectating and player is not None and not player.dead:
+                    if tc["fire"]:
+                        action = ("shoot_aim", player.angle)
+                    elif tc["ram"]:
+                        action = "ram"
+                    elif tc["hazard"]:
+                        if player.item == "oil":
+                            action = "oil"
+                        elif player.item == "cone":
+                            action = "drop_cone"
+                        else:
+                            last_sab = getattr(player, "_last_sab", "oil")
+                            action = "drop_cone" if last_sab == "oil" else "oil"
+                            player._last_sab = "cone" if last_sab == "oil" else "oil"
                 if keys[keybinds.get("drop_hazard", pygame.K_v)] and action is None:
                     last_sab = getattr(player, "_last_sab", "oil")
                     action = "drop_cone" if last_sab == "oil" else "oil"
@@ -2513,7 +2661,7 @@ def main():
                         profile["best_lap"] = player.best_lap
                     save_profile(profile)
                     net_disconnect()
-                    state = "results"
+                    start_cinematic()
 
                 if spectating:
                     steer, action, drift, brake = 0.0, None, False, False
@@ -2578,6 +2726,13 @@ def main():
                                 ghost_best, ghost_time = list(ghost_rec), player.last_lap
                             ghost_rec = []
                             trial_lap = player.cur_lap
+
+                # post-race cinematic: snapshot every car's pose/state this frame so the
+                # finish-line flythrough can replay exactly what happened
+                if len(replay_frames) < REPLAY_MAX_FRAMES:
+                    replay_frames.append([(c.x, c.y, c.angle, c.vx, c.vy, c.boost_time,
+                                            c.drift, c.dead, c.hearts, c.item, c.cur_lap)
+                                           for c in cars])
 
                 sim.update_banner(dt)
 
@@ -2693,6 +2848,8 @@ def main():
 
                 sim.draw_callout_banner(screen)
                 sim.draw_letterbox(screen, letterbox_h)
+                if IS_MOBILE and not spectating:
+                    touch_ui.draw(screen)
 
                 # ---- single-player end conditions ---------------------------------
                 if not online:
@@ -2700,13 +2857,13 @@ def main():
                     if game_mode == "trial":
                         if sim.lap_of(player) >= sim.TOTAL_LAPS:
                             end, end_title = True, "FINISH"
-                    elif game_mode in ("battle", "elim"):
+                    elif game_mode == "elim":
                         if len([c for c in cars if not c.dead]) <= 1:
-                            end, end_title = True, ("BATTLE OVER" if game_mode == "battle" else "FINISH")
+                            end, end_title = True, "FINISH"
                     else:                       # race / team
                         if any(sim.lap_of(c) >= sim.TOTAL_LAPS for c in cars):
                             end, end_title = True, "FINISH"
-                    if not end and player.dead and game_mode not in ("battle", "elim"):
+                    if not end and player.dead and game_mode != "elim":
                         end, end_title = True, "GAME OVER"
                     if end:
                         if not finish_pending:
@@ -2738,7 +2895,53 @@ def main():
                             profile["name"], profile["flag"] = player_name, (
                                 sim.FLAG_CODES[flag_idx] if sim.FLAG_CODES else "us")
                             save_profile(profile)
-                            state = "results"
+                            start_cinematic()
+
+        elif state == "cinematic":
+            n = len(replay_frames)
+            idx = min(n - 1, int(cinematic_pos))
+            snapshot = replay_frames[idx]
+            for c, (sx, sy, sa, svx, svy, sboost, sdrift, sdead, shearts, sitem, slap) in zip(cars, snapshot):
+                c.x, c.y, c.angle = sx, sy, sa
+                c.vx, c.vy = svx, svy
+                c.boost_time, c.drift, c.dead = sboost, sdrift, sdead
+                c.hearts, c.item = shearts, sitem
+
+            focus_lap = snapshot[cinematic_focus][10]
+            if focus_lap > cinematic_last_lap:
+                cinematic_last_lap = focus_lap
+                if sim.TOTAL_LAPS > 1 and cinematic_last_lap < sim.TOTAL_LAPS:
+                    sim.trigger_banner(f"LAP {cinematic_last_lap + 1}", (255, 230, 70), dur=1.4)
+
+            fx, fy = snapshot[cinematic_focus][0], snapshot[cinematic_focus][1]
+            cinematic_cam.follow(dt, fx, fy)
+            sim.update_banner(dt)
+
+            sim.draw_world(screen, cinematic_cam, cars)
+            letterbox_h += (56.0 - letterbox_h) * min(1.0, dt * 6.0)
+            sim.draw_letterbox(screen, letterbox_h)
+            sim.draw_callout_banner(screen)
+            skip_hint = font_small.render("press any key to skip ▶", True, (255, 255, 255))
+            skip_hint.set_alpha(150)
+            screen.blit(skip_hint, skip_hint.get_rect(bottomright=(sim.W - 14, sim.H - 14)))
+
+            if idx >= n - 1:
+                if not cinematic_finale_shown:
+                    cinematic_finale_shown = True
+                    focus = cars[cinematic_focus]
+                    if focus.dead:
+                        sim.trigger_banner("GAME OVER", (255, 90, 90), sub=focus.name.upper(), dur=1.8)
+                    elif final_order and final_order[0] is focus:
+                        sim.trigger_banner("WINNER!", (255, 230, 70), sub=focus.name.upper(), dur=1.8)
+                    else:
+                        rank = final_order.index(focus) + 1 if focus in final_order else 0
+                        label = f"P{rank} FINISH" if rank else "FINISH!"
+                        sim.trigger_banner(label, (255, 230, 70), sub=focus.name.upper(), dur=1.8)
+                cinematic_hold -= dt
+                if cinematic_hold <= 0.0:
+                    state = "results"
+            else:
+                cinematic_pos += dt * cinematic_rate
 
         elif state == "menu":
             draw_bg()
@@ -2860,7 +3063,7 @@ def main():
             sub, foot, rows = results_text()
             ui.draw_results(screen, end_title, rows, t=results_t, sub=sub, chip="FINAL", footer=foot,
                             buttons=results_buttons(), sel=min(results_sel, len(results_buttons()) - 1),
-                            mouse=mouse_pos, pad=bool(pads), status_col=game_mode in ("battle", "elim"))
+                            mouse=mouse_pos, pad=bool(pads), status_col=game_mode == "elim")
 
         elif state == "mode":
             draw_bg()
