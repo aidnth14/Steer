@@ -31,6 +31,8 @@ EXCLUDES = [
     "cffi", "_cffi_backend", "pycparser",   # not used by the game; arm64-only .so blocks x86_64
     "cryptography",                          # ditto: arm64-only _rust .so, game never imports it
     "websockets.speedups",                   # optional C accel; pure-Python fallback is fine
+    "markupsafe", "jinja2",                  # stray transitive pull from the host env; arm64-only
+                                              # _speedups .so blocks x86_64 -- game never imports it
 ]
 
 # Some asset subtrees (flags, sfx, music, button icons) are symlinks to an external store.
@@ -86,7 +88,7 @@ if sys.platform == "darwin":
         info_plist={
             "CFBundleName": "Steer",
             "CFBundleDisplayName": "Steer",
-            "CFBundleShortVersionString": "1.2.0",
+            "CFBundleShortVersionString": "1.3.0",
             "NSHighResolutionCapable": True,
             "LSMinimumSystemVersion": "11.0",
         },

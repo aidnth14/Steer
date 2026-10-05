@@ -93,7 +93,6 @@ DEFAULT_ROOM_SETTINGS = {
     "privacy": "Public",
     "slipstream": "ON",
     "items": "Standard",
-    "spectate": "ON",
 }
 
 
@@ -258,7 +257,7 @@ async def owner_handle_frame(code, inst, cid, msg):
         st = msg.get("settings")
         if isinstance(st, dict):
             for k in ("bot_aggression", "laps", "bot_count", "track", "rotation",
-                      "collision", "privacy", "slipstream", "items", "spectate"):
+                      "collision", "privacy", "slipstream", "items"):
                 if k in st:
                     room.settings[k] = st[k]
             await broadcast(room, room.room_msg())

@@ -1700,6 +1700,8 @@ def main():
 
     def host_create():
         nonlocal netc, pending_net, net_msg, my_ready
+        if netc is not None and netc.status == "connecting":
+            return          # already connecting (e.g. double Enter during the cold-start wait)
         if netc is not None:
             netc.close()    # a stray connection from a prior attempt -- don't leak it
         net_msg, my_ready = "Connecting...", False
@@ -1713,6 +1715,8 @@ def main():
         if len(join_code) != 6:
             net_msg = "Enter the 6-character code"
             return
+        if netc is not None and netc.status == "connecting":
+            return          # already connecting (e.g. double Enter during the cold-start wait)
         if netc is not None:
             netc.close()    # a stray connection from a prior attempt -- don't leak it
         net_msg, my_ready = "Connecting...", False
